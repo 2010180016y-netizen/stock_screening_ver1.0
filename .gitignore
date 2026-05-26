@@ -14,6 +14,14 @@ cache/
 build/
 dist/
 *.egg-info/
+.playwright-mcp/
+.git-global-config
+*.png
+data/market_cache/
+data/*.js
+data/*.log
+data/*.out.log
+data/*.err.log
 
 
 .vercel
