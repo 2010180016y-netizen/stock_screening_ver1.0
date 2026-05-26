@@ -2,24 +2,25 @@
 
 Local-first US stock screening decision-support CLI and token-protected web dashboard.
 
-VCB-Alt helps an operator evaluate watchlist tickers across seven stock archetypes, review risk notes, keep an auditable SQLite log, and run a browser dashboard. It does not place trades and does not call external market-data providers unless explicitly enabled.
+VCB-Alt scans a configured US-equity market universe, prefilters live/near-live movers, enriches the strongest candidates, scores them across seven stock archetypes, and recommends a small decision-support candidate set. User watchlists remain as a manual research aid, not the primary discovery engine. The app does not place trades and does not call external market-data providers unless explicitly enabled.
 
 ## Major Features
 
 - Local SQLite setup with `init-db`
-- Watchlist add/list/remove/seed commands
+- Market-universe scan mode for all-market discovery
+- Watchlist add/list/remove/seed commands for manual research lists
 - Single ticker evaluation with validation and risk warnings
-- Watchlist scan with empty/success/error-safe states
+- Market scan with empty/success/error-safe states
 - Manual CSV data provider for operator-supplied real snapshots
 - Yahoo chart and optional Stooq end-of-day market-data providers with local cache
-- Optional Alpaca near-real-time quote/snapshot layer with a short TTL cache
+- Optional Alpaca active-asset universe and near-real-time multi-symbol snapshot prefilter with a short TTL cache
 - Technical Momentum scoring for automatic market data with a data-quality gate that blocks chart-only final selections
 - Optional `data/enrichment.csv` overlay for fundamentals, catalysts, short/options, insider, float, and related context
 - Optional Finnhub research-data provider for fundamentals, earnings surprise, news catalysts, analyst trends, short interest, options open interest, and insider transactions
 - Optional SEC submissions metadata layer for recent filing context
 - Deterministic AI explanation layer, with optional OpenAI Responses API summaries when explicitly configured
 - Portfolio candidate selection with position, archetype, and high-volatility constraints
-- Local web dashboard with watchlist, scan table, final selection, and operations status
+- Local web dashboard with market scan table, final selection, manual watchlist, and operations status
 - Decision-first public-beta UI with SaaS-safe review labels, scoring-version visibility, and legal/disclosure links
 - Click-through ticker analysis pages with five-year chart, sector/industry, current status, and selection rationale
 - Responsive dashboard and ticker detail pages for desktop, mobile, and browser zoom
@@ -80,12 +81,19 @@ VCB_ALT_DATA_PROVIDER=sample
 VCB_ALT_EXTERNAL_API_ENABLED=false
 VCB_ALT_MARKET_DATA_TIMEOUT_SECONDS=10
 VCB_ALT_MARKET_DATA_CACHE_TTL_HOURS=12
+VCB_ALT_SCAN_MODE=market_universe
+VCB_ALT_MARKET_UNIVERSE_PROVIDER=auto
+VCB_ALT_MARKET_UNIVERSE_MAX_SYMBOLS=5000
+VCB_ALT_MARKET_PREFILTER_LIMIT=30
+VCB_ALT_MARKET_SNAPSHOT_BATCH_SIZE=100
+VCB_ALT_MARKET_SCAN_REQUIRES_LIVE_DATA=false
 VCB_ALT_PUBLIC_WEB_ENABLED=false
 VCB_ALT_WEB_ACCESS_TOKEN=replace-with-at-least-16-random-characters
 VCB_ALT_AUTO_SEED_SAMPLE=true
 ```
 
 `sample` is the safe offline default. `manual` reads `data/snapshots.csv`. `yahoo` fetches end-of-day chart data and requires `VCB_ALT_EXTERNAL_API_ENABLED=true`. `stooq` is also supported, but some Stooq downloads require an API key/captcha flow.
+`VCB_ALT_SCAN_MODE=market_universe` is the intended product mode. It scans the configured universe instead of only user-entered watchlist symbols. Set `VCB_ALT_MARKET_SCAN_REQUIRES_LIVE_DATA=true` in production so the app fails closed when live Alpaca snapshots are unavailable.
 
 ## Usage
 
@@ -102,6 +110,8 @@ python -m vcb_alt web --host 127.0.0.1 --port 8765
 python -m vcb_alt admin logs
 python -m vcb_alt admin failures
 ```
+
+`python -m vcb_alt scan` follows `VCB_ALT_SCAN_MODE`. Use `python -m vcb_alt scan --watchlist` only for the legacy/manual ticker list flow.
 
 Then open:
 

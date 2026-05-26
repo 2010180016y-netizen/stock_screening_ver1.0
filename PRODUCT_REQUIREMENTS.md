@@ -2,7 +2,7 @@
 
 ## 1. Product Purpose
 
-Provide a local-first stock screening assistant that helps a single operator evaluate US stock candidates, review portfolio-risk constraints, and maintain auditable screening logs without making trades automatically.
+Provide a stock screening assistant that scans a configured US-equity market universe, discovers high-scoring candidates from live/near-live market data plus research enrichment, reviews portfolio-risk constraints, and maintains auditable screening logs without making trades automatically.
 
 ## 2. Target Users
 
@@ -20,16 +20,17 @@ Provide a local-first stock screening assistant that helps a single operator eva
 ## 4. Core Features
 
 - Local SQLite initialization.
-- Watchlist add/list/remove commands.
+- Market-universe scan mode that does not depend on user-entered ticker lists.
+- Watchlist add/list/remove commands for manual research lists.
 - Single ticker evaluation with validation and risk notes.
-- Watchlist scan with empty/loading/error/success states represented in CLI output.
+- Market scan with empty/loading/error/success states represented in CLI output.
 - Offline sample data provider for deterministic first-run use.
 - Manual CSV data provider for operator-supplied current snapshots.
 - Automatic Yahoo/Stooq end-of-day price/volume data providers with explicit opt-in and local cache.
 - Technical Momentum scoring for automatic price/volume data, gated so chart-only candidates cannot become final selections.
 - Optional enrichment CSV overlay for operator-verified fundamentals, catalysts, short/options, insider, float, and related context.
 - Optional research-data API enrichment for fundamentals, earnings surprise, news catalysts, analyst trends, short interest, options, and insider activity.
-- Optional near-real-time quote layer for current price context when licensed credentials are configured.
+- Optional Alpaca active-asset universe and near-real-time quote/snapshot layer for market-wide prefiltering when licensed credentials are configured.
 - Optional SEC filing metadata layer for recent disclosure context.
 - AI explanation layer that summarizes why a ticker was selected, the key signals, risk flags, and data-quality limitations.
 - Data coverage scoring across market, fundamental, catalyst, and positioning groups.
@@ -55,7 +56,7 @@ Provide a local-first stock screening assistant that helps a single operator eva
 
 ## 6. MVP Scope
 
-This improvement ships a Python 3.11+ local CLI package and token-protected web dashboard that can be installed, initialized, tested, and used with sample/manual/automatic EOD market data. It preserves the original archetype product direction by allowing price/volume data to support timing while requiring enrichment coverage before final selection.
+This improvement ships a Python 3.11+ local CLI package and token-protected web dashboard that can scan a market universe, prefilter live movers, enrich top names, and produce constrained candidate recommendations. It preserves the original archetype product direction by allowing price/volume data to support timing while requiring enrichment coverage before final selection.
 
 ## 7. Excluded From This Improvement
 
@@ -69,7 +70,7 @@ This improvement ships a Python 3.11+ local CLI package and token-protected web 
 
 - A new operator can follow README/SETUP and run the product locally.
 - `init-db`, `watchlist`, `evaluate`, `scan`, `admin logs`, and `admin failures` work.
-- `select` produces a constrained final candidate list from the watchlist.
+- `scan` and `select` produce a constrained final candidate list from the market universe when `VCB_ALT_SCAN_MODE=market_universe`.
 - Automatic market-data mode can fetch/cache EOD data without silently falling back to sample data.
 - Research-data API enrichment only runs when explicitly configured with a provider and API key.
 - Intraday quote and OpenAI summary providers only run when explicitly configured with credentials.

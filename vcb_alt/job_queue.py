@@ -8,6 +8,7 @@ from typing import Any
 from .db import record_failure
 from .errors import NotFoundError, ValidationError
 from .logging_utils import utc_now
+from .market_universe import scan_market_universe
 from .providers import get_snapshot
 from .scoring import evaluate_snapshot
 from .tenant_store import list_user_watchlist, save_user_evaluation
@@ -207,6 +208,13 @@ def _claim_next_job(conn: Any) -> dict[str, Any] | None:
 
 def _run_tenant_scan(config: Any, conn: Any, job: dict[str, Any]) -> dict[str, Any]:
     user = {"tenant_id": job["tenant_id"], "id": job["user_id"]}
+    if getattr(config, "scan_mode", "watchlist") == "market_universe":
+        report = scan_market_universe(config)
+        for item in report.evaluations:
+            save_user_evaluation(conn, user, item, commit=False)
+        conn.commit()
+        return report.to_api_dict()
+
     items = list_user_watchlist(conn, user)
     evaluations: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []

@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.3.0-market-universe-discovery - 2026-05-26
+
+### Added
+
+- Added `VCB_ALT_SCAN_MODE=market_universe` as the product scan mode for market-wide discovery instead of user-entered watchlist-only evaluation.
+- Added `vcb_alt.market_universe` for Alpaca active-asset universe loading, Alpaca multi-symbol snapshot prefiltering, candidate normalization, Finnhub/CSV enrichment, and portfolio selection.
+- Added short-TTL market scan report caching so many users can reuse the same fresh discovery result instead of triggering provider calls per click.
+- Added Alpaca assets endpoint fallback across paper and live trading hosts so market-universe loading works with either key type when credentials are valid.
+- Added market-universe configuration for provider, max symbols, prefilter size, snapshot batch size, and fail-closed live-data enforcement.
+- Added `data/universe.example.csv` and regression coverage for sample fallback plus cached Alpaca snapshot prefiltering.
+
+### Changed
+
+- Web, CLI, and queue-worker scan paths now use market-universe discovery when configured.
+- `G_TECHNICAL_MOMENTUM` now includes Alpaca intraday surge and relative-volume momentum, while stale data remains blocked.
+- Algorithm documentation now states that OpenAI is explanation-only; stock selection is deterministic scoring over provider data.
+
 ## 1.2.4-algorithm-review-and-ko-localization - 2026-05-24
 
 ### Added

@@ -50,6 +50,12 @@ class AppConfig:
     worker_token: str = ""
     worker_cron_enabled: bool = False
     production_saas_mode: bool = False
+    scan_mode: str = "watchlist"
+    market_universe_provider: str = "auto"
+    market_universe_max_symbols: int = 5000
+    market_prefilter_limit: int = 30
+    market_snapshot_batch_size: int = 100
+    market_scan_requires_live_data: bool = False
 
     @property
     def database_path(self) -> str:
@@ -165,6 +171,27 @@ def load_config(root_dir: Path | None = None) -> AppConfig:
     worker_token = get("WORKER_TOKEN", "")
     worker_cron_enabled = _truthy(get("WORKER_CRON_ENABLED", "false"))
     production_saas_mode = _truthy(get("PRODUCTION_SAAS_MODE", "false"))
+    scan_mode = get("SCAN_MODE", "market_universe").lower()
+    if scan_mode not in {"market_universe", "watchlist"}:
+        raise ValidationError("SCAN_MODE must be one of: market_universe, watchlist.")
+    market_universe_provider = get("MARKET_UNIVERSE_PROVIDER", "auto").lower()
+    if market_universe_provider not in {"auto", "alpaca", "csv", "sample"}:
+        raise ValidationError("MARKET_UNIVERSE_PROVIDER must be one of: auto, alpaca, csv, sample.")
+    market_universe_max_symbols = _parse_positive_int(
+        get("MARKET_UNIVERSE_MAX_SYMBOLS", "5000"),
+        "MARKET_UNIVERSE_MAX_SYMBOLS",
+    )
+    market_prefilter_limit = _parse_positive_int(
+        get("MARKET_PREFILTER_LIMIT", "30"),
+        "MARKET_PREFILTER_LIMIT",
+    )
+    market_snapshot_batch_size = _parse_positive_int(
+        get("MARKET_SNAPSHOT_BATCH_SIZE", "100"),
+        "MARKET_SNAPSHOT_BATCH_SIZE",
+    )
+    if market_snapshot_batch_size > 500:
+        raise ValidationError("MARKET_SNAPSHOT_BATCH_SIZE must be 500 or less.")
+    market_scan_requires_live_data = _truthy(get("MARKET_SCAN_REQUIRES_LIVE_DATA", "false"))
     if production_saas_mode:
         _validate_production_saas_mode(
             database_backend=database_backend,
@@ -218,6 +245,12 @@ def load_config(root_dir: Path | None = None) -> AppConfig:
         worker_token=worker_token,
         worker_cron_enabled=worker_cron_enabled,
         production_saas_mode=production_saas_mode,
+        scan_mode=scan_mode,
+        market_universe_provider=market_universe_provider,
+        market_universe_max_symbols=market_universe_max_symbols,
+        market_prefilter_limit=market_prefilter_limit,
+        market_snapshot_batch_size=market_snapshot_batch_size,
+        market_scan_requires_live_data=market_scan_requires_live_data,
     )
 
 
@@ -256,6 +289,12 @@ def doctor_report(config: AppConfig) -> dict[str, Any]:
         "sec_company_facts_enabled": config.sec_company_facts_enabled,
         "ai_summary_provider": config.ai_summary_provider,
         "ai_summary_cache_ttl_hours": config.ai_summary_cache_ttl_hours,
+        "scan_mode": config.scan_mode,
+        "market_universe_provider": config.market_universe_provider,
+        "market_universe_max_symbols": config.market_universe_max_symbols,
+        "market_prefilter_limit": config.market_prefilter_limit,
+        "market_snapshot_batch_size": config.market_snapshot_batch_size,
+        "market_scan_requires_live_data": config.market_scan_requires_live_data,
         "warnings": warnings,
     }
 

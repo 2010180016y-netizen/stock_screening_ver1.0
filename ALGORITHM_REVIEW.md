@@ -1,18 +1,26 @@
 # Algorithm Review
 
-Date: 2026-05-24 KST
+Date: 2026-05-26 KST
 
 ## One-Line Summary
 
-VCB-Alt ranks watchlist tickers by seven opportunity archetypes, blocks final selection when data coverage is too weak, then selects up to three candidates with portfolio-level exposure and volatility limits.
+VCB-Alt scans the configured market universe, prefilters live/near-live movers, enriches the strongest candidates, ranks them by seven opportunity archetypes, blocks final selection when data coverage is too weak, then selects up to three candidates with portfolio-level exposure and volatility limits.
 
 ## End-To-End Flow
 
-1. The UI or CLI sends a ticker list from the watchlist.
-2. `vcb_alt.providers.get_snapshot()` builds a `StockSnapshot`.
-3. `vcb_alt.scoring.evaluate_snapshot()` validates the ticker and price, scores all archetypes, applies a complexity modifier, checks data coverage, and returns an `EvaluationResult`.
-4. `vcb_alt.portfolio.select_portfolio()` filters to `can_enter=true`, sorts the eligible results, applies portfolio constraints, and returns the final selection.
-5. `vcb_alt.web` renders the result as decision-support copy, not trade instructions.
+1. The UI or CLI starts the configured scan mode. The product default is now `market_universe`; `watchlist` remains as a legacy/manual research mode.
+2. `vcb_alt.market_universe.load_market_universe()` loads active US equities from Alpaca assets when credentials are available, otherwise `data/universe.csv`, otherwise a clearly labeled sample fallback.
+3. `vcb_alt.market_universe.prefilter_market_candidates()` calls Alpaca multi-symbol stock snapshots in batches and ranks the universe by live price change, relative volume, dollar liquidity, and spread.
+4. The top prefilter names are normalized into `StockSnapshot` objects and enriched through Finnhub or `data/enrichment.csv`.
+5. `vcb_alt.scoring.evaluate_snapshot()` validates the ticker and price, scores all archetypes, applies a complexity modifier, checks data coverage, and returns an `EvaluationResult`.
+6. `vcb_alt.portfolio.select_portfolio()` filters to `can_enter=true`, sorts the eligible results, applies portfolio constraints, and returns the final selection.
+7. `vcb_alt.web` renders the result as decision-support copy, not trade instructions.
+
+## Current AI And Data Acquisition
+
+- Stock selection itself is deterministic scoring, not an LLM call.
+- OpenAI is used only for optional explanation summaries when `VCB_ALT_AI_SUMMARY_PROVIDER=openai`; otherwise the app uses deterministic template summaries.
+- The app does not browser-scrape arbitrary websites. It uses provider APIs: Alpaca `/v2/assets` for the market universe, Alpaca `/v2/stocks/snapshots` for live/near-live prefilter data, Finnhub REST endpoints for research enrichment, Yahoo/Stooq chart endpoints for detail/history when configured, and optional SEC JSON metadata.
 
 ## Data Inputs
 
@@ -35,7 +43,7 @@ All archetype scores are clamped between `0` and `100`.
 - `D_BIOTECH`: FDA milestone, insider buying, moderate short interest, market-cap range, news catalyst, trend score.
 - `E_SHORT_SQUEEZE`: short interest, days to cover, borrow rate, call open-interest change, volume z-score, catalyst, surge bonus.
 - `F_PICK_SHOVEL`: data-center narrative, sector relative strength, 200DMA status, EPS/analyst revision, revenue acceleration, breakout volume, trend bonus.
-- `G_TECHNICAL_MOMENTUM`: Yahoo/Stooq EOD trend and surge metrics only, disabled for stale/non-market sources.
+- `G_TECHNICAL_MOMENTUM`: Yahoo/Stooq EOD trend metrics plus Alpaca intraday surge/relative-volume momentum. Stale sources are disabled.
 
 ## Complexity Modifier
 
@@ -75,7 +83,7 @@ Coverage labels:
 - `35-59`: price-volume-only.
 - `<35`: insufficient.
 
-This is why price/volume-only scans can show monitoring results but are blocked from final selection until fundamentals/catalyst/positioning enrichment exists.
+This is why price/volume-only market sweeps can show monitoring results but are blocked from final selection until fundamentals/catalyst/positioning enrichment exists.
 
 ## Portfolio Selection
 

@@ -27,6 +27,7 @@ from .db import (
 from .errors import AppError
 from .job_queue import run_queued_scan_jobs, validate_job_limit
 from .logging_utils import append_file_log
+from .market_universe import scan_market_universe
 from .models import OperationResult
 from .performance import benchmark_scoring
 from .portfolio import select_portfolio
@@ -72,8 +73,9 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate_parser.add_argument("ticker")
     evaluate_parser.add_argument("--json", action="store_true")
 
-    scan_parser = subparsers.add_parser("scan", help="Evaluate all watchlist tickers.")
+    scan_parser = subparsers.add_parser("scan", help="Run the configured scan mode.")
     scan_parser.add_argument("--limit", type=int, default=None, help="Optional max ticker count.")
+    scan_parser.add_argument("--watchlist", action="store_true", help="Force legacy watchlist scan.")
     scan_parser.add_argument("--json", action="store_true")
 
     select_parser = subparsers.add_parser("select", help="Select final portfolio candidates from the watchlist.")
@@ -229,9 +231,26 @@ def dispatch(args: argparse.Namespace) -> OperationResult:
             return OperationResult.success(f"Evaluated {ticker}.", {"evaluation": result.to_dict()})
 
         if args.command in {"scan", "morning", "weekly"}:
+            if config.scan_mode == "market_universe" and not getattr(args, "watchlist", False):
+                return _scan_market_universe(config, conn, limit=getattr(args, "limit", None))
             return _scan_watchlist(config, conn, command=args.command, limit=getattr(args, "limit", None))
 
         if args.command == "select":
+            if config.scan_mode == "market_universe":
+                report = scan_market_universe(config, max_positions=args.max_positions)
+                for item in report.evaluations:
+                    save_evaluation(conn, item)
+                log_operation(
+                    conn,
+                    "market universe select",
+                    "success" if not report.failures else "partial_success",
+                    f"Selected {len(report.selection.selected)} candidates from market universe.",
+                    {"elapsed_ms": report.elapsed_ms, "prefilter_count": report.prefilter.get("count", 0)},
+                )
+                return OperationResult.success(
+                    "Market-universe portfolio candidate selection completed.",
+                    report.to_api_dict(),
+                )
             evaluations, failures = _evaluate_watchlist(config, conn, command="select")
             selection = select_portfolio(
                 evaluations,
@@ -315,6 +334,21 @@ def _scan_watchlist(config: Any, conn: Any, *, command: str, limit: int | None =
         "Scan completed.",
         {"state": status, "items": [item.to_dict() for item in evaluations], "failures": failures, "count": len(evaluations)},
     )
+
+
+def _scan_market_universe(config: Any, conn: Any, *, limit: int | None = None) -> OperationResult:
+    report = scan_market_universe(config, universe_limit=limit)
+    for item in report.evaluations:
+        save_evaluation(conn, item)
+    status = "success" if not report.failures else "partial_success"
+    log_operation(
+        conn,
+        "market universe scan",
+        status,
+        f"Scanned {report.universe.get('count', 0)} market symbols and scored {len(report.evaluations)} candidates.",
+        {"elapsed_ms": report.elapsed_ms, "prefilter_count": report.prefilter.get("count", 0)},
+    )
+    return OperationResult.success("Market-universe scan completed.", report.to_api_dict())
 
 
 def _evaluate_watchlist(config: Any, conn: Any, *, command: str, limit: int | None = None) -> tuple[list[Any], list[dict[str, Any]]]:

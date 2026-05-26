@@ -20,11 +20,13 @@ class CliTests(unittest.TestCase):
             "VCB_ALT_DATABASE_URL": os.environ.get("VCB_ALT_DATABASE_URL"),
             "VCB_ALT_DATA_PROVIDER": os.environ.get("VCB_ALT_DATA_PROVIDER"),
             "VCB_ALT_EXTERNAL_API_ENABLED": os.environ.get("VCB_ALT_EXTERNAL_API_ENABLED"),
+            "VCB_ALT_SCAN_MODE": os.environ.get("VCB_ALT_SCAN_MODE"),
         }
         os.chdir(self.root)
         os.environ["VCB_ALT_DATABASE_URL"] = "sqlite:///./data/test.db"
         os.environ["VCB_ALT_DATA_PROVIDER"] = "sample"
         os.environ["VCB_ALT_EXTERNAL_API_ENABLED"] = "false"
+        os.environ["VCB_ALT_SCAN_MODE"] = "watchlist"
 
     def tearDown(self) -> None:
         os.chdir(self.old_cwd)

@@ -1,5 +1,39 @@
 # Implementation Plan
 
+## 2026-05-26 Market-Universe Algorithm Correction
+
+### Problem
+
+The implemented scan path evaluated user-entered watchlist symbols. That does not match the intended product: a market-wide stock discovery system that scans real US equities, scores the strongest current opportunities, and recommends the highest-confidence candidates.
+
+### Implementation Direction
+
+1. Make `VCB_ALT_SCAN_MODE=market_universe` the product default while keeping `watchlist` as a legacy/manual mode.
+2. Load the market universe from Alpaca active US-equity assets when API credentials are configured.
+3. Support `data/universe.csv` as an operator-controlled fallback universe and sample data only as an explicit non-live fallback.
+4. Use Alpaca multi-symbol stock snapshots as the fast live/near-live prefilter layer.
+5. Rank the full universe by intraday change, relative volume, dollar liquidity, and spread.
+6. Cache the completed market scan report for the intraday TTL so concurrent users reuse fresh results instead of creating provider-call storms.
+7. Enrich the top prefilter names with Finnhub or operator CSV research data.
+8. Run the existing seven-archetype scoring engine and data-coverage gate over the enriched candidates.
+9. Select up to three final candidates with existing portfolio constraints.
+
+### Files Updated
+
+- `vcb_alt/config.py`: scan-mode and market-universe configuration.
+- `vcb_alt/market_universe.py`: new universe loading, Alpaca snapshot prefiltering, candidate normalization, and market scan result orchestration.
+- `vcb_alt/scoring.py`: intraday Alpaca momentum support and market-data coverage recognition.
+- `vcb_alt/web.py`: dashboard scan/select endpoints now use market-universe mode when configured.
+- `vcb_alt/job_queue.py`: background workers can process market-universe scans.
+- `vcb_alt/cli.py`: CLI scan/select honor the configured scan mode.
+- `.env.example`: market-universe environment variables.
+- `data/universe.example.csv`: operator universe template.
+- `tests/test_market_universe.py`: regression coverage for sample fallback and cached Alpaca prefilter flow.
+
+### Remaining Production Requirement
+
+Production must set `VCB_ALT_EXTERNAL_API_ENABLED=true`, `VCB_ALT_INTRADAY_DATA_PROVIDER=alpaca`, Alpaca credentials, `VCB_ALT_RESEARCH_DATA_PROVIDER=finnhub` or `finnhub_csv`, and preferably `VCB_ALT_MARKET_SCAN_REQUIRES_LIVE_DATA=true` so sample fallback cannot be mistaken for live recommendations.
+
 Current status note, 2026-05-19: this was the initial implementation plan for converting a documentation-only repository into a runnable MVP. The implemented system has since advanced to a token-protected web dashboard with automatic EOD market data and a decision-first production UI. For the current architecture, read `research.md`. For input-based paging, read `plan.md`. For the next public-beta gate, read `SAAS_IMPLEMENTATION_PLAN.md`.
 
 ## 0.13. 2026-05-24 Algorithm Review And Korean Localization

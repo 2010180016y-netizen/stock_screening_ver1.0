@@ -89,6 +89,18 @@ def score_archetypes(snapshot: StockSnapshot) -> dict[str, int]:
 
 def _market_momentum_score(snapshot: StockSnapshot) -> int:
     base_source = snapshot.source.split("+", 1)[0]
+    if base_source.startswith("alpaca"):
+        if snapshot.data_quality.startswith("stale"):
+            return 0
+        score = 0
+        score += int(snapshot.surge_score * 0.45)
+        score += _points(snapshot.intraday_change_pct >= 2, 10)
+        score += _points(snapshot.intraday_change_pct >= 5, 15)
+        score += _points(snapshot.breakout_volume_ratio >= 1.5, 10)
+        score += _points(snapshot.breakout_volume_ratio >= 2.5, 10)
+        score += _points(snapshot.intraday_volume >= 500_000, 5)
+        score += _points(snapshot.intraday_volume >= 2_000_000, 5)
+        return _clamp_score(score)
     if base_source not in {"stooq", "yahoo"}:
         return 0
     if snapshot.data_quality.startswith("stale"):
@@ -221,6 +233,7 @@ def assess_data_coverage(snapshot: StockSnapshot) -> dict[str, object]:
         or snapshot.surge_score > 0
         or snapshot.return_12w_pct != 0
         or snapshot.breakout_volume_ratio != 1
+        or bool(snapshot.intraday_source and snapshot.intraday_price > 0)
     )
     fundamental_present = any(
         [

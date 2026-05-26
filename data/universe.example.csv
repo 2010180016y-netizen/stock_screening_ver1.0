@@ -1,0 +1,6 @@
+ticker,name,exchange,tradable
+AAPL,Apple Inc.,NASDAQ,true
+MSFT,Microsoft Corporation,NASDAQ,true
+NVDA,NVIDIA Corporation,NASDAQ,true
+PLTR,Palantir Technologies Inc.,NASDAQ,true
+VST,Vistra Corp.,NYSE,true

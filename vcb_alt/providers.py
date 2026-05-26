@@ -224,6 +224,10 @@ def provider_status(config: AppConfig) -> dict[str, Any]:
     enrichment_available = enrichment_path.exists()
     if config.data_provider in {"yahoo", "yahoo_chart", "stooq"} and not config.external_api_enabled:
         warnings.append("External API access is disabled; this provider cannot fetch fresh market data.")
+    if config.scan_mode == "market_universe" and not (
+        config.external_api_enabled and config.alpaca_api_key and config.alpaca_api_secret
+    ):
+        warnings.append("Market-universe scan needs Alpaca assets and stock snapshots for live all-market discovery.")
     research_provider_available = enrichment_available or (
         config.research_data_provider.startswith("finnhub") and bool(config.finnhub_api_key)
     )
@@ -244,6 +248,13 @@ def provider_status(config: AppConfig) -> dict[str, Any]:
         "cache_ttl_hours": config.market_data_cache_ttl_hours,
         "timeout_seconds": config.market_data_timeout_seconds,
         "capabilities": capabilities,
+        "scan_mode": config.scan_mode,
+        "market_universe_provider": config.market_universe_provider,
+        "market_universe_max_symbols": config.market_universe_max_symbols,
+        "market_prefilter_limit": config.market_prefilter_limit,
+        "market_snapshot_batch_size": config.market_snapshot_batch_size,
+        "market_scan_requires_live_data": config.market_scan_requires_live_data,
+        "market_universe_live_ready": bool(config.external_api_enabled and config.alpaca_api_key and config.alpaca_api_secret),
         "research_data_provider": config.research_data_provider,
         "research_capabilities": research_capabilities,
         "research_api_configured": bool(config.finnhub_api_key) if config.research_data_provider.startswith("finnhub") else False,

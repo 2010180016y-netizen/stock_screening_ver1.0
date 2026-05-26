@@ -2,7 +2,35 @@
 
 QA date: 2026-05-18 KST
 
-Latest verification update: 2026-05-22 KST
+Latest verification update: 2026-05-26 KST
+
+## Market-Universe Algorithm Verification - 2026-05-26 KST
+
+Commands run:
+
+```powershell
+& 'C:\stable-diffusion-ui\installer_files\env\python.exe' -m unittest tests.test_market_universe tests.test_web tests.test_cli tests.test_saas_auth
+& 'C:\stable-diffusion-ui\installer_files\env\python.exe' -m unittest discover -s tests
+& 'C:\stable-diffusion-ui\installer_files\env\python.exe' tools\lint.py
+& 'C:\stable-diffusion-ui\installer_files\env\python.exe' tools\typecheck.py
+& 'C:\stable-diffusion-ui\installer_files\env\python.exe' -m compileall vcb_alt tests tools
+```
+
+Results:
+
+- Targeted regression tests passed: `30` tests.
+- Full unit test suite passed: `58` tests.
+- Lint passed: `lint ok (42 files)`.
+- Typecheck passed: `type hints ok (359 objects)`.
+- Compile/build smoke passed.
+- Local HTTP smoke passed with `VCB_ALT_SCAN_MODE=market_universe`; `/api/scan` returned `scan_mode=market_universe`, sample fallback metadata, and selected `VST`, `PLTR`, `MSTR`.
+- Production configuration smoke after deploy returned `scan_mode=market_universe`, `external_api_enabled=true`, `market_universe_live_ready=true`, Alpaca intraday ready, and Finnhub research ready.
+- First production live scan attempt failed at Alpaca assets authentication with `HTTP 401`; code now retries both Alpaca paper and live trading asset endpoints before reporting credential failure.
+
+Remaining live-data note:
+
+- Local verification intentionally used sample fallback because local Alpaca/Finnhub secrets were not loaded.
+- Production must set `VCB_ALT_EXTERNAL_API_ENABLED=true`, Alpaca credentials, Finnhub or CSV enrichment, and `VCB_ALT_MARKET_SCAN_REQUIRES_LIVE_DATA=true` before the service can truthfully claim live all-market recommendations.
 
 ## Current Status Summary - 2026-05-22 KST
 

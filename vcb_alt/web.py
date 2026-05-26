@@ -28,6 +28,7 @@ from .db import (
 )
 from .errors import AppError, ValidationError
 from .job_queue import enqueue_scan_job, get_scan_job, list_scan_jobs, queue_status, run_queued_scan_jobs, validate_job_limit
+from .market_universe import scan_market_universe
 from .models import OperationResult, SCORING_VERSION
 from .portfolio import select_portfolio
 from .providers import get_price_history, get_snapshot, get_ticker_profile, provider_status
@@ -261,11 +262,13 @@ def handle_api(
             if not config.user_auth_enabled:
                 raise ValidationError("User authentication is not enabled.")
             user = require_user(conn, _bearer_token(headers or {}))
-            return _scan_user_watchlist(config, conn, user)
+            return _scan_user(config, conn, user)
         if path == "/api/user/select" and method in {"GET", "POST"}:
             if not config.user_auth_enabled:
                 raise ValidationError("User authentication is not enabled.")
             user = require_user(conn, _bearer_token(headers or {}))
+            if config.scan_mode == "market_universe":
+                return _scan_user(config, conn, user, message="Selection completed.")
             evaluations, failures, elapsed_ms = _evaluate_user_watchlist(config, conn, user)
             selection = select_portfolio(evaluations)
             return OperationResult.success(
@@ -318,6 +321,8 @@ def handle_api(
         if method == "GET" and path == "/api/scan":
             return _scan(config, conn)
         if method == "GET" and path == "/api/select":
+            if config.scan_mode == "market_universe":
+                return _scan(config, conn, message="Selection completed.")
             evaluations, failures, elapsed_ms = _evaluate_watchlist(config, conn, "web select")
             selection = select_portfolio(evaluations)
             log_operation(
@@ -340,7 +345,24 @@ def handle_api(
     raise ValidationError("API route not found.")
 
 
-def _scan(config: AppConfig, conn: Any) -> OperationResult:
+def _scan(config: AppConfig, conn: Any, *, message: str = "Scan completed.") -> OperationResult:
+    if config.scan_mode == "market_universe":
+        report = scan_market_universe(config)
+        for result in report.evaluations:
+            save_evaluation(conn, result)
+        log_operation(
+            conn,
+            "market universe scan",
+            "success" if not report.failures else "partial_success",
+            f"Scanned {report.universe.get('count', 0)} market symbols and scored {len(report.evaluations)} candidates.",
+            {
+                "elapsed_ms": report.elapsed_ms,
+                "failures": len(report.failures),
+                "prefilter_count": report.prefilter.get("count", 0),
+            },
+        )
+        return OperationResult.success(message, report.to_api_dict())
+
     evaluations, failures, elapsed_ms = _evaluate_watchlist(config, conn, "web scan")
     status = "success" if not failures else "partial_success"
     log_operation(
@@ -361,13 +383,29 @@ def _scan(config: AppConfig, conn: Any) -> OperationResult:
     )
 
 
-def _scan_user_watchlist(config: AppConfig, conn: Any, user: dict[str, Any]) -> OperationResult:
+def _scan_user(config: AppConfig, conn: Any, user: dict[str, Any], *, message: str = "Scan completed.") -> OperationResult:
+    if config.scan_mode == "market_universe":
+        report = scan_market_universe(config)
+        for result in report.evaluations:
+            save_user_evaluation(conn, user, result, commit=False)
+        conn.commit()
+        return OperationResult.success(message, report.to_api_dict())
+    return _scan_user_watchlist(config, conn, user, message=message)
+
+
+def _scan_user_watchlist(
+    config: AppConfig,
+    conn: Any,
+    user: dict[str, Any],
+    *,
+    message: str = "Scan completed.",
+) -> OperationResult:
     # The dashboard scan button needs an immediate tenant-scoped result set; queue-backed scans
     # remain available for heavier hosted load, but this path keeps the owner trial UI responsive.
     evaluations, failures, elapsed_ms = _evaluate_user_watchlist(config, conn, user)
     selection = select_portfolio(evaluations)
     return OperationResult.success(
-        "Scan completed.",
+        message,
         {
             "items": [item.to_dict() for item in evaluations],
             "failures": failures,
@@ -440,6 +478,10 @@ def _release_status(config: AppConfig) -> dict[str, Any]:
             "intraday_ready": live_intraday_ready,
             "ai_summary_provider": status.get("ai_summary_provider"),
             "ai_summary_ready": status.get("ai_summary_configured"),
+            "scan_mode": config.scan_mode,
+            "market_universe_provider": status.get("market_universe_provider"),
+            "market_universe_live_ready": status.get("market_universe_live_ready"),
+            "market_prefilter_limit": status.get("market_prefilter_limit"),
             "database_backend": config.database_backend,
             "rate_limit_backend": config.rate_limit_backend,
             "scan_queue_enabled": config.scan_queue_enabled,
@@ -449,8 +491,8 @@ def _release_status(config: AppConfig) -> dict[str, Any]:
         },
         "operator_can_use": [
             "Open the token-protected dashboard.",
-            "Add or remove watchlist tickers.",
-            "Run scan and final selection.",
+            "Run all-market discovery from the configured market universe.",
+            "Use watchlist tickers as an optional manual research list.",
             "Open ticker detail pages with five-year charts, sector/industry, rationale, and AI summary.",
             "Review provider warnings before treating a candidate as research-complete.",
         ],
@@ -960,15 +1002,15 @@ INDEX_HTML = """<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>VCB-Alt Screening Desk</title>
+  <title>VCB-Alt Market Discovery</title>
   <link rel="stylesheet" href="/assets/app.css">
 </head>
 <body>
   <main class="app-shell">
     <header class="topbar" aria-label="Application header">
       <div>
-        <p class="eyebrow">VCB-Alt Screening Desk</p>
-        <h1 data-i18n="dashboard_title">Stock selection workspace</h1>
+        <p class="eyebrow">VCB-Alt Market Discovery</p>
+        <h1 data-i18n="dashboard_title">Market-wide stock discovery</h1>
       </div>
       <div class="status-strip">
         <span id="provider">provider</span>
@@ -988,11 +1030,11 @@ INDEX_HTML = """<!doctype html>
 
     <section class="toolbar" aria-label="Screening actions">
       <form id="add-form" class="ticker-form">
-        <label for="ticker-input" data-i18n="add_tickers">Add tickers</label>
+        <label for="ticker-input" data-i18n="add_tickers">Manual watchlist</label>
         <input id="ticker-input" name="tickers" autocomplete="off" placeholder="PLTR MSTR VST">
         <button type="submit" data-i18n="add">Add</button>
       </form>
-      <button id="scan-button" type="button" data-i18n="run_scan">Run scan</button>
+      <button id="scan-button" type="button" data-i18n="run_scan">Scan market</button>
       <button id="select-button" type="button" data-i18n="select_final">Select final 3</button>
       <button id="refresh-button" type="button" data-i18n="refresh">Refresh</button>
     </section>
@@ -1003,7 +1045,7 @@ INDEX_HTML = """<!doctype html>
       <aside class="sidebar" aria-label="Watchlist and operations">
         <section class="panel watchlist-panel">
           <div class="panel-head">
-          <h2 data-i18n="watchlist">Watchlist</h2>
+          <h2 data-i18n="watchlist">Manual watchlist</h2>
           <span id="watchlist-count">0</span>
           </div>
           <div id="watchlist" class="watchlist"></div>
@@ -1721,16 +1763,16 @@ const I18N = {
     access_help: 'Enter the deployment access token configured by the operator.',
     access_token: 'Access token',
     open_dashboard: 'Open dashboard',
-    dashboard_title: 'Stock selection workspace',
+    dashboard_title: 'Market-wide stock discovery',
     data_not_loaded: 'Data as of: not loaded',
     provider_not_loaded: 'Provider: not loaded',
     ops_checking: 'Operational status: checking',
-    add_tickers: 'Add tickers',
+    add_tickers: 'Manual watchlist',
     add: 'Add',
-    run_scan: 'Run scan',
+    run_scan: 'Scan market',
     select_final: 'Select final 3',
     refresh: 'Refresh',
-    watchlist: 'Watchlist',
+    watchlist: 'Manual watchlist',
     operations: 'Operations',
     decision_first: 'Decision-first dashboard',
     entry_candidates: 'Entry candidates',
@@ -1744,9 +1786,9 @@ const I18N = {
     allocation: 'Allocation',
     data: 'Data',
     reason: 'Reason',
-    run_scan_empty: 'Run scan to populate candidates.',
+    run_scan_empty: 'Scan the market to populate candidates.',
     monitor_excluded: 'Monitor or excluded',
-    lower_confidence_empty: 'Lower-confidence names appear here after scanning.',
+    lower_confidence_empty: 'Lower-confidence market names appear here after scanning.',
     legal_notice: 'Decision support only. No automatic trading.',
     risk_disclosure: 'Risk disclosure',
     privacy: 'Privacy',
@@ -1756,7 +1798,7 @@ const I18N = {
     not_run: 'Not run',
     failures: 'failures',
     selection_completed: 'Selection completed in {ms} ms.',
-    no_eligible: 'No eligible candidates. Review watchlist quality or run again after data refresh.',
+    no_eligible: 'No eligible candidates. Check live data coverage or run again after data refresh.',
     allocation_guide: 'Allocation guide',
     no_excluded: 'No excluded names.',
     no_actionable: 'No actionable setups.',

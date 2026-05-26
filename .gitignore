@@ -18,6 +18,7 @@ dist/
 .git-global-config
 *.png
 data/market_cache/
+data/market_universe/
 data/*.js
 data/*.log
 data/*.out.log
