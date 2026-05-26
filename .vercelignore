@@ -1,0 +1,10 @@
+.playwright-mcp/
+data/
+logs/
+tests/
+tools/
+deploy/
+*.png
+*.db
+*.pyc
+__pycache__/

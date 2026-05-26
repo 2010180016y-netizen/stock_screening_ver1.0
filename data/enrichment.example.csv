@@ -1,0 +1,3 @@
+ticker,revenue_surprise_pct,revenue_acceleration_pp,insider_buy_count_90d,forward_guidance_raised,news_catalyst_30d,peer_30d_return_pct,fda_milestone_90d,short_interest_pct,days_to_cover,borrow_rate_pct,call_open_interest,put_open_interest,put_call_ratio,call_oi_change_pct,data_center_narrative,eps_revision_pct,float_shares_m,market_cap_m,enrichment_source,enrichment_as_of
+PLTR,30,8,2,true,true,0,false,0,0,0,2000,600,0.3,200,false,24,2200,285000,operator-research,2026-05-20
+VST,0,4,0,false,true,0,false,0,0,0,1200,900,0.75,0,true,28,340,51000,operator-research,2026-05-20

@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.env
+.venv/
+venv/
+data/*.db
+data/market_cache/
+logs/
+exports/
+backups/
+vcb-alt-dashboard*.png

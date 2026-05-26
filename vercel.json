@@ -1,0 +1,14 @@
+{
+  "crons": [
+    {
+      "path": "/api/admin/run-worker?limit=25",
+      "schedule": "0 0 * * *"
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/api/index.py"
+    }
+  ]
+}

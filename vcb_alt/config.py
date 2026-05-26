@@ -1,0 +1,317 @@
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from .errors import ValidationError
+
+
+@dataclass(frozen=True)
+class AppConfig:
+    database_url: str
+    log_level: str
+    timezone: str
+    data_provider: str
+    external_api_enabled: bool
+    root_dir: Path
+    data_dir: Path
+    log_dir: Path
+    database_backend: str = "sqlite"
+    public_web_enabled: bool = False
+    web_access_token: str = ""
+    auto_seed_sample: bool = True
+    market_data_timeout_seconds: float = 10.0
+    market_data_cache_ttl_hours: float = 12.0
+    stooq_api_key: str = ""
+    intraday_data_provider: str = "none"
+    alpaca_api_key: str = ""
+    alpaca_api_secret: str = ""
+    alpaca_data_feed: str = "iex"
+    intraday_cache_ttl_seconds: float = 60.0
+    research_data_provider: str = "csv"
+    finnhub_api_key: str = ""
+    research_data_cache_ttl_hours: float = 12.0
+    sec_company_facts_enabled: bool = False
+    sec_user_agent: str = "vcb-alt-stock-screener contact@example.invalid"
+    ai_summary_provider: str = "template"
+    openai_api_key: str = ""
+    openai_model: str = "gpt-4.1-mini"
+    ai_summary_cache_ttl_hours: float = 12.0
+    user_auth_enabled: bool = False
+    user_registration_enabled: bool = False
+    rate_limit_per_minute: int = 120
+    auth_rate_limit_per_minute: int = 2000
+    user_rate_limit_per_minute: int = 600
+    worker_rate_limit_per_minute: int = 1200
+    rate_limit_backend: str = "memory"
+    scan_queue_enabled: bool = False
+    worker_token: str = ""
+    worker_cron_enabled: bool = False
+    production_saas_mode: bool = False
+
+    @property
+    def database_path(self) -> str:
+        if not self.database_url.startswith("sqlite:///"):
+            raise ValidationError("Only sqlite:/// DATABASE_URL values are supported in the local MVP.")
+        raw_path = self.database_url.removeprefix("sqlite:///")
+        if raw_path == ":memory:":
+            return raw_path
+        path = Path(raw_path).expanduser()
+        if not path.is_absolute():
+            path = self.root_dir / path
+        return str(path)
+
+
+def _load_env_file(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    if not path.exists():
+        return values
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip().strip('"').strip("'")
+    return values
+
+
+def _truthy(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _resolve_dir(root: Path, raw_value: str) -> Path:
+    path = Path(raw_value).expanduser()
+    if not path.is_absolute():
+        path = root / path
+    return path
+
+
+def load_config(root_dir: Path | None = None) -> AppConfig:
+    root = (root_dir or Path.cwd()).resolve()
+    env_file_values = _load_env_file(root / ".env")
+
+    def get(name: str, default: str) -> str:
+        prefixed = f"VCB_ALT_{name}"
+        return os.getenv(prefixed) or env_file_values.get(prefixed) or os.getenv(name) or env_file_values.get(name) or default
+
+    database_url = get("DATABASE_URL", "sqlite:///./data/vcb_alt.db")
+    database_backend = _database_backend(database_url)
+    log_level = get("LOG_LEVEL", "INFO").upper()
+    timezone = get("TIMEZONE", "Asia/Seoul")
+    data_provider = get("DATA_PROVIDER", "sample").lower()
+    external_api_enabled = _truthy(get("EXTERNAL_API_ENABLED", "false"))
+
+    if data_provider not in {"sample", "manual"} and not external_api_enabled:
+        raise ValidationError("External data providers require VCB_ALT_EXTERNAL_API_ENABLED=true.")
+    public_web_enabled = _truthy(get("PUBLIC_WEB_ENABLED", "false"))
+    web_access_token = get("WEB_ACCESS_TOKEN", "")
+    if public_web_enabled and len(web_access_token) < 16:
+        raise ValidationError("Public web mode requires VCB_ALT_WEB_ACCESS_TOKEN with at least 16 characters.")
+    market_data_timeout_seconds = _parse_positive_float(get("MARKET_DATA_TIMEOUT_SECONDS", "10"), "MARKET_DATA_TIMEOUT_SECONDS")
+    market_data_cache_ttl_hours = _parse_positive_float(get("MARKET_DATA_CACHE_TTL_HOURS", "12"), "MARKET_DATA_CACHE_TTL_HOURS")
+    stooq_api_key = get("STOOQ_API_KEY", "")
+    intraday_data_provider = get("INTRADAY_DATA_PROVIDER", "none").lower()
+    if intraday_data_provider not in {"none", "alpaca"}:
+        raise ValidationError("INTRADAY_DATA_PROVIDER must be one of: none, alpaca.")
+    alpaca_api_key = get("ALPACA_API_KEY", "")
+    alpaca_api_secret = get("ALPACA_API_SECRET", "")
+    alpaca_data_feed = get("ALPACA_DATA_FEED", "iex").lower()
+    if alpaca_data_feed not in {"iex", "sip", "delayed_sip", "otc", "boats", "overnight"}:
+        raise ValidationError("ALPACA_DATA_FEED must be one of: iex, sip, delayed_sip, otc, boats, overnight.")
+    intraday_cache_ttl_seconds = _parse_positive_float(
+        get("INTRADAY_CACHE_TTL_SECONDS", "60"),
+        "INTRADAY_CACHE_TTL_SECONDS",
+    )
+    research_data_provider = get("RESEARCH_DATA_PROVIDER", "csv").lower()
+    if research_data_provider not in {"csv", "finnhub", "finnhub_csv"}:
+        raise ValidationError("RESEARCH_DATA_PROVIDER must be one of: csv, finnhub, finnhub_csv.")
+    finnhub_api_key = get("FINNHUB_API_KEY", "")
+    research_data_cache_ttl_hours = _parse_positive_float(
+        get("RESEARCH_DATA_CACHE_TTL_HOURS", "12"),
+        "RESEARCH_DATA_CACHE_TTL_HOURS",
+    )
+    sec_company_facts_enabled = _truthy(get("SEC_COMPANY_FACTS_ENABLED", "false"))
+    sec_user_agent = get("SEC_USER_AGENT", "vcb-alt-stock-screener contact@example.invalid")
+    ai_summary_provider = get("AI_SUMMARY_PROVIDER", "template").lower()
+    if ai_summary_provider not in {"template", "openai"}:
+        raise ValidationError("AI_SUMMARY_PROVIDER must be one of: template, openai.")
+    openai_api_key = get("OPENAI_API_KEY", "")
+    openai_model = get("OPENAI_MODEL", "gpt-4.1-mini")
+    ai_summary_cache_ttl_hours = _parse_positive_float(
+        get("AI_SUMMARY_CACHE_TTL_HOURS", "12"),
+        "AI_SUMMARY_CACHE_TTL_HOURS",
+    )
+    user_auth_enabled = _truthy(get("USER_AUTH_ENABLED", "false"))
+    user_registration_enabled = _truthy(get("USER_REGISTRATION_ENABLED", "false"))
+    rate_limit_per_minute = _parse_positive_int(get("RATE_LIMIT_PER_MINUTE", "120"), "RATE_LIMIT_PER_MINUTE")
+    auth_rate_limit_per_minute = _parse_positive_int(
+        get("AUTH_RATE_LIMIT_PER_MINUTE", "2000"),
+        "AUTH_RATE_LIMIT_PER_MINUTE",
+    )
+    user_rate_limit_per_minute = _parse_positive_int(
+        get("USER_RATE_LIMIT_PER_MINUTE", "600"),
+        "USER_RATE_LIMIT_PER_MINUTE",
+    )
+    worker_rate_limit_per_minute = _parse_positive_int(
+        get("WORKER_RATE_LIMIT_PER_MINUTE", "1200"),
+        "WORKER_RATE_LIMIT_PER_MINUTE",
+    )
+    rate_limit_backend = get("RATE_LIMIT_BACKEND", "memory").lower()
+    if rate_limit_backend not in {"memory", "database"}:
+        raise ValidationError("RATE_LIMIT_BACKEND must be one of: memory, database.")
+    scan_queue_enabled = _truthy(get("SCAN_QUEUE_ENABLED", "false"))
+    worker_token = get("WORKER_TOKEN", "")
+    worker_cron_enabled = _truthy(get("WORKER_CRON_ENABLED", "false"))
+    production_saas_mode = _truthy(get("PRODUCTION_SAAS_MODE", "false"))
+    if production_saas_mode:
+        _validate_production_saas_mode(
+            database_backend=database_backend,
+            user_auth_enabled=user_auth_enabled,
+            rate_limit_backend=rate_limit_backend,
+            scan_queue_enabled=scan_queue_enabled,
+            worker_token=worker_token,
+            worker_cron_enabled=worker_cron_enabled,
+        )
+    data_dir = _resolve_dir(root, get("DATA_DIR", "./data"))
+    log_dir = _resolve_dir(root, get("LOG_DIR", "./logs"))
+
+    return AppConfig(
+        database_url=database_url,
+        database_backend=database_backend,
+        log_level=log_level,
+        timezone=timezone,
+        data_provider=data_provider,
+        external_api_enabled=external_api_enabled,
+        root_dir=root,
+        data_dir=data_dir,
+        log_dir=log_dir,
+        public_web_enabled=public_web_enabled,
+        web_access_token=web_access_token,
+        auto_seed_sample=_truthy(get("AUTO_SEED_SAMPLE", "true")),
+        market_data_timeout_seconds=market_data_timeout_seconds,
+        market_data_cache_ttl_hours=market_data_cache_ttl_hours,
+        stooq_api_key=stooq_api_key,
+        intraday_data_provider=intraday_data_provider,
+        alpaca_api_key=alpaca_api_key,
+        alpaca_api_secret=alpaca_api_secret,
+        alpaca_data_feed=alpaca_data_feed,
+        intraday_cache_ttl_seconds=intraday_cache_ttl_seconds,
+        research_data_provider=research_data_provider,
+        finnhub_api_key=finnhub_api_key,
+        research_data_cache_ttl_hours=research_data_cache_ttl_hours,
+        sec_company_facts_enabled=sec_company_facts_enabled,
+        sec_user_agent=sec_user_agent,
+        ai_summary_provider=ai_summary_provider,
+        openai_api_key=openai_api_key,
+        openai_model=openai_model,
+        ai_summary_cache_ttl_hours=ai_summary_cache_ttl_hours,
+        user_auth_enabled=user_auth_enabled,
+        user_registration_enabled=user_registration_enabled,
+        rate_limit_per_minute=rate_limit_per_minute,
+        auth_rate_limit_per_minute=auth_rate_limit_per_minute,
+        user_rate_limit_per_minute=user_rate_limit_per_minute,
+        worker_rate_limit_per_minute=worker_rate_limit_per_minute,
+        rate_limit_backend=rate_limit_backend,
+        scan_queue_enabled=scan_queue_enabled,
+        worker_token=worker_token,
+        worker_cron_enabled=worker_cron_enabled,
+        production_saas_mode=production_saas_mode,
+    )
+
+
+def doctor_report(config: AppConfig) -> dict[str, Any]:
+    warnings: list[str] = []
+    if not (config.root_dir / ".env").exists():
+        warnings.append(".env is missing; safe defaults are active. Copy .env.example to .env for explicit config.")
+    if config.data_provider == "sample":
+        warnings.append("Sample data provider is active. No live market data is fetched.")
+    if not config.external_api_enabled:
+        warnings.append("External APIs are disabled, which is the safe private-beta default.")
+    return {
+        "database_backend": config.database_backend,
+        "database_path": config.database_path if config.database_backend == "sqlite" else "<postgresql>",
+        "log_dir": str(config.log_dir),
+        "timezone": config.timezone,
+        "data_provider": config.data_provider,
+        "external_api_enabled": config.external_api_enabled,
+        "public_web_enabled": config.public_web_enabled,
+        "user_auth_enabled": config.user_auth_enabled,
+        "user_registration_enabled": config.user_registration_enabled,
+        "rate_limit_per_minute": config.rate_limit_per_minute,
+        "auth_rate_limit_per_minute": config.auth_rate_limit_per_minute,
+        "user_rate_limit_per_minute": config.user_rate_limit_per_minute,
+        "worker_rate_limit_per_minute": config.worker_rate_limit_per_minute,
+        "rate_limit_backend": config.rate_limit_backend,
+        "scan_queue_enabled": config.scan_queue_enabled,
+        "worker_configured": len(config.worker_token) >= 16,
+        "worker_cron_enabled": config.worker_cron_enabled,
+        "production_saas_mode": config.production_saas_mode,
+        "market_data_cache_ttl_hours": config.market_data_cache_ttl_hours,
+        "intraday_data_provider": config.intraday_data_provider,
+        "intraday_cache_ttl_seconds": config.intraday_cache_ttl_seconds,
+        "research_data_provider": config.research_data_provider,
+        "research_data_cache_ttl_hours": config.research_data_cache_ttl_hours,
+        "sec_company_facts_enabled": config.sec_company_facts_enabled,
+        "ai_summary_provider": config.ai_summary_provider,
+        "ai_summary_cache_ttl_hours": config.ai_summary_cache_ttl_hours,
+        "warnings": warnings,
+    }
+
+
+def _parse_positive_float(raw: str, name: str) -> float:
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValidationError(f"{name} must be a number.") from exc
+    if value <= 0:
+        raise ValidationError(f"{name} must be greater than 0.")
+    return value
+
+
+def _parse_positive_int(raw: str, name: str) -> int:
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValidationError(f"{name} must be an integer.") from exc
+    if value <= 0:
+        raise ValidationError(f"{name} must be greater than 0.")
+    return value
+
+
+def _database_backend(database_url: str) -> str:
+    if database_url.startswith("sqlite:///"):
+        return "sqlite"
+    if database_url.startswith(("postgresql://", "postgres://")):
+        return "postgresql"
+    raise ValidationError("DATABASE_URL must start with sqlite:///, postgresql://, or postgres://.")
+
+
+def _validate_production_saas_mode(
+    *,
+    database_backend: str,
+    user_auth_enabled: bool,
+    rate_limit_backend: str,
+    scan_queue_enabled: bool,
+    worker_token: str,
+    worker_cron_enabled: bool,
+) -> None:
+    missing: list[str] = []
+    if database_backend != "postgresql":
+        missing.append("VCB_ALT_DATABASE_URL=postgresql://...")
+    if not user_auth_enabled:
+        missing.append("VCB_ALT_USER_AUTH_ENABLED=true")
+    if rate_limit_backend != "database":
+        missing.append("VCB_ALT_RATE_LIMIT_BACKEND=database")
+    if not scan_queue_enabled:
+        missing.append("VCB_ALT_SCAN_QUEUE_ENABLED=true")
+    if len(worker_token) < 16:
+        missing.append("VCB_ALT_WORKER_TOKEN=<long-random-token>")
+    if not worker_cron_enabled:
+        missing.append("VCB_ALT_WORKER_CRON_ENABLED=true")
+    if missing:
+        raise ValidationError(
+            "Production SaaS mode requires durable auth, tenant storage, rate limiting, and scan queue settings: "
+            + ", ".join(missing)
+        )

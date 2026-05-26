@@ -1,0 +1,313 @@
+from __future__ import annotations
+
+from .models import ARCHETYPE_CAPS, ARCHETYPE_LABELS, SCORING_VERSION, EvaluationResult, StockSnapshot
+from .validation import validate_positive_number, validate_ticker
+
+MIN_DATA_COVERAGE_FOR_ENTRY = 60
+
+
+def _points(condition: bool, value: int) -> int:
+    return value if condition else 0
+
+
+def _clamp_score(value: int) -> int:
+    return max(0, min(100, int(value)))
+
+
+def _setup_strength(score: int) -> str:
+    if score >= 70:
+        return "STRONG_SETUP"
+    if score >= 50:
+        return "SETUP"
+    return "NO_SETUP"
+
+
+def score_archetypes(snapshot: StockSnapshot) -> dict[str, int]:
+    price = validate_positive_number(snapshot.price, "price")
+    trend_bonus = min(15, max(0, snapshot.trend_template_score // 6))
+    surge_bonus = min(10, max(0, snapshot.surge_score // 10))
+    market_momentum_score = _market_momentum_score(snapshot)
+    scores = {
+        "A_AI_TECH": _clamp_score(
+            _points(max(snapshot.revenue_surprise_pct, snapshot.earnings_surprise_pct) >= 20, 25)
+            + _points(snapshot.revenue_acceleration_pp >= 5, 20)
+            + _points(snapshot.sector_rs_12w_pp >= 10, 20)
+            + _points(snapshot.insider_buy_count_90d >= 2, 15)
+            + _points(snapshot.breakout_volume_ratio >= 1.5, 10)
+            + _points(snapshot.forward_guidance_raised, 10)
+            + _points(snapshot.analyst_revision_score >= 35, 8)
+            + trend_bonus
+        ),
+        "B_CRYPTO_PIVOT": _clamp_score(
+            _points(snapshot.btc_6m_return_pct >= 30, 25)
+            + _points(snapshot.news_catalyst_30d, 25)
+            + _points(snapshot.mining_capacity_increase_pct >= 30, 15)
+            + _points(snapshot.above_200dma, 10)
+            + _points(snapshot.volume_z_score_30d >= 2.5, 15)
+            + _points(snapshot.drawdown_recovery_pct >= 20, 10)
+            + surge_bonus
+        ),
+        "C_QUANTUM": _clamp_score(
+            _points(snapshot.float_shares_m > 0 and snapshot.float_shares_m < 50, 20)
+            + _points(0 < snapshot.market_cap_m < 500, 20)
+            + _points(snapshot.news_catalyst_30d, 25)
+            + _points(snapshot.peer_30d_return_pct >= 30, 20)
+            + _points(snapshot.volume_z_score_30d >= 3, 15)
+            + _points(1 <= price <= 10, 20)
+            + surge_bonus
+        ),
+        "D_BIOTECH": _clamp_score(
+            _points(snapshot.fda_milestone_90d, 30)
+            + _points(snapshot.insider_buy_count_90d >= 2, 15)
+            + _points(0 < snapshot.short_interest_pct < 10, 15)
+            + _points(50 <= snapshot.market_cap_m <= 500, 20)
+            + _points(snapshot.news_catalyst_30d, 20)
+            + _points(snapshot.trend_template_score >= 50, 10)
+        ),
+        "E_SHORT_SQUEEZE": _clamp_score(
+            _points(snapshot.short_interest_pct >= 25, 30)
+            + _points(snapshot.days_to_cover >= 5, 15)
+            + _points(snapshot.borrow_rate_pct >= 50, 15)
+            + _points(snapshot.call_oi_change_pct >= 200, 10)
+            + _points(snapshot.volume_z_score_30d >= 2.5, 15)
+            + _points(snapshot.news_catalyst_30d, 15)
+            + surge_bonus
+        ),
+        "F_PICK_SHOVEL": _clamp_score(
+            _points(snapshot.data_center_narrative, 25)
+            + _points(snapshot.sector_rs_12w_pp >= 20, 20)
+            + _points(snapshot.above_200dma, 15)
+            + _points(max(snapshot.eps_revision_pct, snapshot.analyst_revision_score) >= 20, 20)
+            + _points(snapshot.revenue_acceleration_pp >= 3, 10)
+            + _points(snapshot.breakout_volume_ratio >= 1.4, 10)
+            + trend_bonus
+        ),
+        "G_TECHNICAL_MOMENTUM": market_momentum_score,
+    }
+    return scores
+
+
+def _market_momentum_score(snapshot: StockSnapshot) -> int:
+    base_source = snapshot.source.split("+", 1)[0]
+    if base_source not in {"stooq", "yahoo"}:
+        return 0
+    if snapshot.data_quality.startswith("stale"):
+        return 0
+    score = 0
+    score += int(snapshot.trend_template_score * 0.45)
+    score += int(snapshot.surge_score * 0.25)
+    score += _points(snapshot.return_12w_pct >= 8, 10)
+    score += _points(snapshot.return_12w_pct >= 20, 10)
+    score += _points(snapshot.sector_rs_12w_pp >= 0, 5)
+    score += _points(snapshot.sector_rs_12w_pp >= 10, 10)
+    score += _points(snapshot.price_vs_50dma_pct >= -3, 5)
+    score += _points(snapshot.drawdown_52w_pct >= -12, 5)
+    return _clamp_score(score)
+
+
+def score_complexity_modifier(snapshot: StockSnapshot, primary_archetype: str) -> int:
+    modifier = 0
+    modifier += _points(snapshot.news_catalyst_30d, 8)
+    modifier += _points(snapshot.call_oi_change_pct >= 200, 6)
+    modifier += _points(snapshot.short_interest_pct >= 25, 6)
+    modifier += _points(snapshot.volume_z_score_30d >= 2.5, 5)
+
+    if primary_archetype == "B_CRYPTO_PIVOT":
+        modifier += _points(snapshot.btc_6m_return_pct >= 50, 8)
+    if primary_archetype == "D_BIOTECH" and snapshot.short_interest_pct >= 20:
+        modifier -= 10
+    if primary_archetype in {"A_AI_TECH", "F_PICK_SHOVEL"} and snapshot.sector_rs_12w_pp < -5:
+        modifier -= 8
+
+    return max(-25, min(25, modifier))
+
+
+def evaluate_snapshot(snapshot: StockSnapshot) -> EvaluationResult:
+    ticker = validate_ticker(snapshot.ticker)
+    price = validate_positive_number(snapshot.price, "price")
+    archetype_scores = score_archetypes(snapshot)
+    primary_archetype = max(archetype_scores, key=archetype_scores.get)
+    primary_score = archetype_scores[primary_archetype]
+    modifier = score_complexity_modifier(snapshot, primary_archetype)
+    combined_score = _clamp_score(primary_score + modifier)
+    setup = _setup_strength(combined_score)
+    coverage = assess_data_coverage(snapshot)
+    can_enter = combined_score >= 55 and bool(coverage["allows_entry"])
+
+    cap = ARCHETYPE_CAPS[primary_archetype]
+    score_factor = 0.55 + (combined_score / 100) * 0.45
+    suggested_size = round(min(cap, cap * score_factor), 2) if can_enter else 0.0
+    stop_loss = round(price * 0.92, 2)
+
+    rationale = [
+        f"Primary archetype is {ARCHETYPE_LABELS[primary_archetype]} with base score {primary_score}.",
+        f"Complexity modifier is {modifier}; combined score is {combined_score}.",
+    ]
+    if can_enter:
+        rationale.append("Score is above the MVP portfolio-manager threshold of 55.")
+    elif combined_score >= 55 and not coverage["allows_entry"]:
+        rationale.append("Score passed the numeric threshold, but final selection is blocked until enrichment data is present.")
+    else:
+        rationale.append("Score is below the MVP portfolio-manager threshold of 55; wait.")
+
+    warnings = [
+        "Decision support only; not investment advice.",
+        "No automatic trading is performed.",
+    ]
+    if snapshot.source.startswith("sample"):
+        warnings.append("Result uses sample/offline data, not live market data.")
+    if primary_archetype in {"C_QUANTUM", "D_BIOTECH", "E_SHORT_SQUEEZE"}:
+        warnings.append("High-volatility archetype: avoid stacking multiple simultaneous positions.")
+    precision_notes = [
+        f"Data quality: {snapshot.data_quality}.",
+        f"Trend template score: {snapshot.trend_template_score}/100.",
+        f"Surge score: {snapshot.surge_score}/100.",
+    ]
+    base_source = snapshot.source.split("+", 1)[0]
+    has_research = bool(snapshot.enrichment_source)
+    if base_source in {"stooq", "yahoo"} and not has_research:
+        precision_notes.append(
+            "Market-data provider supplies EOD price/volume only; "
+            "fundamentals and catalysts remain unavailable unless research data is configured."
+        )
+    if has_research:
+        enrichment_source = snapshot.enrichment_source or "data/enrichment.csv"
+        enrichment_as_of = snapshot.enrichment_as_of or "unknown"
+        precision_notes.append(f"Research enrichment applied from {enrichment_source} as of {enrichment_as_of}.")
+    if snapshot.intraday_source:
+        precision_notes.append(
+            f"Intraday quote layer: {snapshot.intraday_source} price {snapshot.intraday_price} "
+            f"as of {snapshot.intraday_as_of or 'unknown'}."
+        )
+    precision_notes.append(
+        f"Data coverage: {coverage['score']}/100 ({coverage['label']}). {coverage['detail']}"
+    )
+
+    status = "BUY_CANDIDATE" if can_enter and setup == "STRONG_SETUP" else "WATCH" if can_enter else "WAIT"
+    decision_label = _decision_label(status)
+    public_label = _public_label(status)
+
+    return EvaluationResult(
+        ticker=ticker,
+        company_name=snapshot.company_name,
+        scoring_version=SCORING_VERSION,
+        primary_archetype=primary_archetype,
+        primary_archetype_label=ARCHETYPE_LABELS[primary_archetype],
+        archetype_scores=archetype_scores,
+        complexity_modifier=modifier,
+        combined_score=combined_score,
+        setup_strength=setup,
+        can_enter=can_enter,
+        suggested_size_pct=suggested_size,
+        stop_loss=stop_loss,
+        status=status,
+        decision_label=decision_label,
+        public_label=public_label,
+        rationale=rationale,
+        warnings=warnings,
+        source=snapshot.source,
+        data_as_of=snapshot.data_as_of,
+        data_quality=snapshot.data_quality,
+        precision_notes=precision_notes,
+        data_coverage_score=int(coverage["score"]),
+        data_coverage_label=str(coverage["label"]),
+        data_coverage_detail=str(coverage["detail"]),
+    )
+
+
+def assess_data_coverage(snapshot: StockSnapshot) -> dict[str, object]:
+    market_present = snapshot.price > 0 and (
+        snapshot.trend_template_score > 0
+        or snapshot.surge_score > 0
+        or snapshot.return_12w_pct != 0
+        or snapshot.breakout_volume_ratio != 1
+    )
+    fundamental_present = any(
+        [
+            snapshot.market_cap_m > 0,
+            snapshot.revenue_surprise_pct != 0,
+            snapshot.earnings_surprise_pct != 0,
+            snapshot.revenue_acceleration_pp != 0,
+            snapshot.eps_revision_pct != 0,
+            snapshot.analyst_revision_score != 0,
+            snapshot.forward_guidance_raised,
+        ]
+    )
+    catalyst_present = any(
+        [
+            snapshot.news_catalyst_30d,
+            snapshot.news_headline_count_30d > 0,
+            snapshot.filing_catalyst_30d,
+            snapshot.fda_milestone_90d,
+            snapshot.data_center_narrative,
+            snapshot.btc_6m_return_pct != 0,
+            snapshot.mining_capacity_increase_pct != 0,
+            snapshot.peer_30d_return_pct != 0,
+        ]
+    )
+    positioning_present = any(
+        [
+            snapshot.float_shares_m > 0,
+            snapshot.insider_buy_count_90d > 0,
+            snapshot.short_interest_pct > 0,
+            snapshot.days_to_cover > 0,
+            snapshot.borrow_rate_pct > 0,
+            snapshot.call_open_interest > 0,
+            snapshot.put_open_interest > 0,
+            snapshot.analyst_buy_count > 0,
+            snapshot.call_oi_change_pct != 0,
+        ]
+    )
+    score = (
+        _points(market_present, 35)
+        + _points(fundamental_present, 25)
+        + _points(catalyst_present, 20)
+        + _points(positioning_present, 20)
+    )
+    missing = []
+    if not market_present:
+        missing.append("market price/volume")
+    if not fundamental_present:
+        missing.append("fundamentals/earnings")
+    if not catalyst_present:
+        missing.append("catalyst/news")
+    if not positioning_present:
+        missing.append("float/short/options/insider positioning")
+    if score >= 80:
+        label = "multi-source"
+    elif score >= MIN_DATA_COVERAGE_FOR_ENTRY:
+        label = "enriched"
+    elif score >= 35:
+        label = "price-volume-only"
+    else:
+        label = "insufficient"
+    detail = (
+        "Missing: " + ", ".join(missing) + "."
+        if missing
+        else "Required market, fundamental, catalyst, and positioning groups present."
+    )
+    return {
+        "score": score,
+        "label": label,
+        "detail": detail,
+        "allows_entry": score >= MIN_DATA_COVERAGE_FOR_ENTRY,
+    }
+
+
+def _decision_label(status: str) -> str:
+    labels = {
+        "BUY_CANDIDATE": "High-scoring watchlist candidate",
+        "WATCH": "Watchlist candidate",
+        "WAIT": "No current setup",
+    }
+    return labels.get(status, "Needs review")
+
+
+def _public_label(status: str) -> str:
+    # Public/SaaS UI copy must describe a research workflow state, not an instruction to trade.
+    labels = {
+        "BUY_CANDIDATE": "High-priority review candidate",
+        "WATCH": "Review candidate",
+        "WAIT": "Monitor only",
+    }
+    return labels.get(status, "Needs review")

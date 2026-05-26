@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: vcb-alt-screening
+    env: docker
+    plan: starter
+    healthCheckPath: /api/health
+    envVars:
+      - key: VCB_ALT_DATABASE_URL
+        value: sqlite:///./data/vcb_alt.db
+      - key: VCB_ALT_LOG_LEVEL
+        value: INFO
+      - key: VCB_ALT_TIMEZONE
+        value: Asia/Seoul
+      - key: VCB_ALT_DATA_PROVIDER
+        value: yahoo
+      - key: VCB_ALT_EXTERNAL_API_ENABLED
+        value: "true"
+      - key: VCB_ALT_MARKET_DATA_CACHE_TTL_HOURS
+        value: "12"
+      - key: VCB_ALT_PUBLIC_WEB_ENABLED
+        value: "true"
+      - key: VCB_ALT_WEB_ACCESS_TOKEN
+        sync: false
+      - key: VCB_ALT_AUTO_SEED_SAMPLE
+        value: "true"
