@@ -31,7 +31,7 @@ https://stockscreeningver10.vercel.app/api/release-status?token=vcb-beta-2026051
    - Selection rationale
    - Data coverage
    - Short interest/options/analyst metric slots
-   - AI summary panel
+   - Explanation summary panel
    - Provider warnings
 
 ## Current Data Mode
@@ -42,7 +42,7 @@ The deployed usage build should use the verified owner-trial provider mix:
 Market provider: yahoo
 Research provider: finnhub
 Intraday provider: none
-AI summary provider: template
+Summary provider label: template summary
 ```
 
 This means the app is usable for owner workflow validation with Yahoo market history and Finnhub research enrichment. Alpaca remains optional because the current Alpaca credential pair returned HTTP 401 during production checks.
@@ -90,7 +90,7 @@ Use `finnhub_csv` instead of `finnhub` if you want API data first and operator-r
 - Scan completes without a server error.
 - Selection returns either eligible candidates or clear data-quality blocks.
 - Each selected ticker links to a detail page.
-- Detail page shows chart, industry, rationale, and AI summary.
+- Detail page shows chart, industry, deterministic scoring rationale, and explanation summary.
 - Provider status does not expose secrets.
 - Release status returns `release_channel=operator_trial`.
 - Known limitations are visible and not hidden from the operator.

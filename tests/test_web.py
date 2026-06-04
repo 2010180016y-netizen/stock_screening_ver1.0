@@ -17,6 +17,7 @@ from vcb_alt.web import (
     _dashboard_js,
     _detail_js,
     _is_authorized,
+    _should_auto_seed_watchlist,
     handle_api,
 )
 
@@ -55,6 +56,16 @@ class WebTests(unittest.TestCase):
             provider = handle_api(config, "GET", "/api/provider-status", "", None)
             self.assertTrue(provider.ok)
             self.assertEqual(provider.data["provider"], "sample")
+
+            health = handle_api(config, "GET", "/api/provider-health", "", None)
+            self.assertTrue(health.ok)
+            self.assertEqual(health.data["final_candidate_policy"], "allow_configured_fallbacks")
+            self.assertIn("alpaca", health.data["providers"])
+
+            diagnostics = handle_api(config, "GET", "/api/provider-diagnostics/alpaca", "", None)
+            self.assertTrue(diagnostics.ok)
+            self.assertFalse(diagnostics.data["ready"])
+            self.assertEqual(diagnostics.data["classification"], "missing_config")
 
             release = handle_api(config, "GET", "/api/release-status", "", None)
             self.assertTrue(release.ok)
@@ -95,8 +106,18 @@ class WebTests(unittest.TestCase):
             self.assertIn("HttpOnly", cookie)
             self.assertIn("Secure", cookie)
 
-    def test_dashboard_exposes_decision_first_regions(self) -> None:
-        self.assertIn("Decision-first dashboard", INDEX_HTML)
+    def test_dashboard_exposes_market_wide_discovery_regions(self) -> None:
+        self.assertIn("Market-wide discovery", INDEX_HTML)
+        self.assertIn("Scan full market / latest candidates", INDEX_HTML)
+        self.assertIn("Optional manual research", INDEX_HTML)
+        self.assertIn("Secondary drawer", INDEX_HTML)
+        self.assertIn("never seed candidate output automatically", INDEX_HTML)
+        self.assertIn('id="starter-research-button"', INDEX_HTML)
+        self.assertIn('class="panel watchlist-panel secondary-research-panel"', INDEX_HTML)
+        self.assertIn('id="scan-freshness"', INDEX_HTML)
+        self.assertIn('id="provider-source"', INDEX_HTML)
+        self.assertIn('id="coverage-state"', INDEX_HTML)
+        self.assertIn('id="fail-closed-state"', INDEX_HTML)
         self.assertIn('id="actionable-body"', INDEX_HTML)
         self.assertIn('id="excluded-body"', INDEX_HTML)
         self.assertIn('id="detail-modal"', INDEX_HTML)
@@ -112,6 +133,13 @@ class WebTests(unittest.TestCase):
         self.assertIn('data-lang-option="ko"', INDEX_HTML)
         self.assertIn('data-lang-option="ko"', DETAIL_HTML)
         self.assertIn("Noto Sans KR", APP_CSS)
+        self.assertIn(".discovery-summary", APP_CSS)
+        self.assertIn(".primary-cta", APP_CSS)
+        self.assertIn(".secondary-research-panel", APP_CSS)
+        self.assertIn(".starter-helper", APP_CSS)
+        self.assertIn(".candidate-data-row", APP_CSS)
+        self.assertIn(".decision-area { order: 1; }", APP_CSS)
+        self.assertIn(".sidebar { display: block; border-right: 0; order: 2; }", APP_CSS)
         self.assertIn("overflow-wrap: anywhere", APP_CSS)
         self.assertIn("td::before", APP_CSS)
         self.assertIn("localStorage.setItem('vcb_lang'", APP_JS)
@@ -122,13 +150,135 @@ class WebTests(unittest.TestCase):
         detail_js = _detail_js()
 
         self.assertIn("접근 권한 필요", dashboard_js)
-        self.assertIn("개 중 ${actionable.length}개 진입 검토", dashboard_js)
-        self.assertIn("우선 검토 후보", dashboard_js)
-        self.assertIn("AI/테크 메가트렌드", dashboard_js)
+        self.assertIn("시장 전체 스캔/최신 후보 확인", dashboard_js)
+        self.assertIn("개 중 ${actionable.length}개 연구 후보", dashboard_js)
+        self.assertIn("AI/기술 메가트렌드", dashboard_js)
+        self.assertIn("실데이터 없으면 후보 미노출", dashboard_js)
         self.assertIn("종목 분석", detail_js)
         self.assertIn("최근 5년 가격과 거래량", detail_js)
         self.assertIn("장중 시세", detail_js)
-        self.assertIn("전문가 합의 분석", detail_js)
+        self.assertIn("전문가 검토 항목", detail_js)
+
+    def test_watchlist_api_marks_manual_research_as_secondary_in_market_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = AppConfig(
+                database_url="sqlite:///./data/test.db",
+                log_level="INFO",
+                timezone="Asia/Seoul",
+                data_provider="sample",
+                external_api_enabled=False,
+                root_dir=Path(tmp),
+                data_dir=Path(tmp) / "data",
+                log_dir=Path(tmp) / "logs",
+                scan_mode="market_universe",
+            )
+            with connect(config) as conn:
+                init_db(conn)
+
+            watchlist = handle_api(config, "GET", "/api/watchlist", "", None)
+            self.assertTrue(watchlist.ok)
+            self.assertEqual(watchlist.data["metadata"]["purpose"], "optional_manual_research")
+            self.assertEqual(watchlist.data["metadata"]["core_flow"], "market_wide_discovery")
+            self.assertFalse(watchlist.data["metadata"]["starter_seeded"])
+            self.assertTrue(watchlist.data["metadata"]["starter_helper_available"])
+            self.assertIn("scan snapshot endpoint", watchlist.data["metadata"]["result_boundary"])
+
+            add = handle_api(config, "POST", "/api/watchlist", "", {"tickers": "PLTR MSTR"})
+            self.assertTrue(add.ok)
+            self.assertEqual(add.data["metadata"]["purpose"], "optional_manual_research")
+
+    def test_saas_mode_returns_migration_response_for_legacy_global_endpoints(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = AppConfig(
+                database_url="sqlite:///./data/test.db",
+                log_level="INFO",
+                timezone="Asia/Seoul",
+                data_provider="sample",
+                external_api_enabled=False,
+                root_dir=Path(tmp),
+                data_dir=Path(tmp) / "data",
+                log_dir=Path(tmp) / "logs",
+                user_auth_enabled=True,
+                user_registration_enabled=True,
+                scan_mode="market_universe",
+            )
+            with connect(config) as conn:
+                init_db(conn)
+
+            cases = [
+                ("GET", "/api/watchlist", "/api/user/watchlist"),
+                ("POST", "/api/watchlist", "/api/user/watchlist"),
+                ("DELETE", "/api/watchlist", "/api/user/watchlist"),
+                ("GET", "/api/scan", "/api/user/scan"),
+                ("POST", "/api/scan", "/api/user/scan"),
+                ("GET", "/api/select", "/api/user/select"),
+                ("POST", "/api/select", "/api/user/select"),
+            ]
+            for method, path, target in cases:
+                with self.subTest(method=method, path=path):
+                    response = handle_api(config, method, path, "ticker=PLTR", {"tickers": "PLTR"})
+                    self.assertFalse(response.ok)
+                    self.assertEqual(response.status_code, 410)
+                    self.assertEqual(response.error["code"], "LEGACY_ENDPOINT_GONE")
+                    self.assertIn(target, response.error["message"])
+                    self.assertIn("tenant-scoped /api/user/*", response.error["detail"])
+
+    def test_served_dashboard_uses_tenant_scoped_api_helper_in_saas_mode(self) -> None:
+        dashboard_js = _dashboard_js()
+
+        self.assertIn("function endpoint(legacyPath, tenantPath)", dashboard_js)
+        self.assertIn("state.config && state.config.user_auth_enabled ? tenantPath : legacyPath", dashboard_js)
+        self.assertIn("endpoint('/api/watchlist', '/api/user/watchlist')", dashboard_js)
+        self.assertIn("endpoint('/api/scan', '/api/user/scan')", dashboard_js)
+        self.assertIn("endpoint('/api/select', '/api/user/select')", dashboard_js)
+        self.assertNotIn("api('/api/watchlist'", dashboard_js)
+        self.assertNotIn('api("/api/watchlist"', dashboard_js)
+        self.assertNotIn("api('/api/scan'", dashboard_js)
+        self.assertNotIn('api("/api/scan"', dashboard_js)
+        self.assertNotIn("api('/api/select'", dashboard_js)
+        self.assertNotIn('api("/api/select"', dashboard_js)
+
+    def test_auto_seed_sample_is_disabled_for_market_wide_and_production_saas(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            market_config = AppConfig(
+                database_url="sqlite:///./data/test.db",
+                log_level="INFO",
+                timezone="Asia/Seoul",
+                data_provider="sample",
+                external_api_enabled=False,
+                root_dir=root,
+                data_dir=root / "data",
+                log_dir=root / "logs",
+                auto_seed_sample=True,
+                scan_mode="market_universe",
+            )
+            saas_config = AppConfig(
+                **{
+                    **market_config.__dict__,
+                    "scan_mode": "watchlist",
+                    "production_saas_mode": True,
+                }
+            )
+            legacy_config = AppConfig(
+                **{
+                    **market_config.__dict__,
+                    "scan_mode": "watchlist",
+                    "production_saas_mode": False,
+                }
+            )
+
+            self.assertFalse(_should_auto_seed_watchlist(market_config))
+            self.assertFalse(_should_auto_seed_watchlist(saas_config))
+            self.assertTrue(_should_auto_seed_watchlist(legacy_config))
+
+    def test_served_js_makes_starter_watchlist_optional(self) -> None:
+        dashboard_js = _dashboard_js()
+
+        self.assertIn("async function ensureStarterWatchlist() {\n  return;\n}", dashboard_js)
+        self.assertIn("async function seedStarterResearchList()", dashboard_js)
+        self.assertIn("starter-research-button", dashboard_js)
+        self.assertIn("optional_onboarding_helper", dashboard_js)
 
     def test_ticker_analysis_api_includes_chart_industry_and_reason(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -143,7 +293,10 @@ class WebTests(unittest.TestCase):
             self.assertIn("trend_template_score", analysis.data["metrics"])
             self.assertIn("ai_summary", analysis.data)
             self.assertEqual(analysis.data["ai_summary"]["provider"], "template")
-            self.assertIn("decision support only", " ".join(analysis.data["ai_summary"]["limitations"]))
+            self.assertEqual(analysis.data["ai_summary"]["provider_label"], "template summary")
+            self.assertEqual(analysis.data["ai_summary"]["selection_source"], "deterministic_scoring")
+            self.assertEqual(analysis.data["ai_summary"]["role"], "explanation_only")
+            self.assertIn("not a trading instruction", " ".join(analysis.data["ai_summary"]["limitations"]))
 
 
 class _FakeHandler:

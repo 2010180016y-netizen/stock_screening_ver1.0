@@ -161,10 +161,10 @@ CREATE TABLE market_regime (
     
     -- 5 leading indicators
     breadth_ad_line REAL,            -- NYSE A-D line
-    defensive_rotation_signal BOOLEAN,
+    defensive_rotation_factor BOOLEAN,
     vix_term_backwardation BOOLEAN,
     credit_spread_widening BOOLEAN,
-    high_low_beta_signal BOOLEAN,
+    high_low_beta_factor BOOLEAN,
     
     -- Warning
     early_warning_level TEXT,        -- "Green", "Yellow", "Orange", "Red"
@@ -289,7 +289,7 @@ position_sizing:
   high_vol_archetypes_concurrent_max: 1
   pm_entry_threshold: 55
 
-drawdown_buying:
+drawdown_recovery:
   normal: 0.85
   shallow: 1.0
   moderate: 1.20

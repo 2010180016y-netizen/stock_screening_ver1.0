@@ -38,15 +38,19 @@ def collect_ops_report(base_url: str, timeout: float, access_token: str = "") ->
         name: value.get("message") or value.get("error") for name, value in checks.items() if not value.get("ok")
     }
     release = checks["release_status"].get("data") or {}
+    configured = release.get("configured_data") if isinstance(release.get("configured_data"), dict) else {}
     provider = checks["provider_status"].get("data") or {}
     return {
         "overall_status": "ok" if not failures else "degraded",
         "failures": failures,
         "production_saas_ready": bool(release.get("production_saas_ready")),
+        "public_launch_ready": bool(release.get("public_launch_ready")),
         "release_channel": release.get("release_channel"),
-        "database_backend": release.get("database_backend"),
-        "queue_enabled": release.get("scan_queue_enabled"),
-        "worker_cron_enabled": release.get("worker_cron_enabled"),
+        "database_backend": configured.get("database_backend") or release.get("database_backend"),
+        "queue_enabled": configured.get("scan_queue_enabled") or release.get("scan_queue_enabled"),
+        "worker_cron_enabled": configured.get("worker_cron_enabled") or release.get("worker_cron_enabled"),
+        "user_auth_enabled": configured.get("user_auth_enabled") or release.get("user_auth_enabled"),
+        "rate_limit_backend": configured.get("rate_limit_backend") or release.get("rate_limit_backend"),
         "market_provider": provider.get("provider"),
         "research_provider": provider.get("research_data_provider"),
         "intraday_provider": provider.get("intraday_data_provider"),

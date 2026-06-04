@@ -29,7 +29,7 @@ The snapshot model supports these groups:
 - Market data: price, 12-week return, 12-month return, 52-week drawdown, moving-average distance, breakout volume, volume z-score, relative strength versus benchmark.
 - Fundamentals and earnings: market cap, revenue surprise, earnings surprise, revenue acceleration, EPS revision, analyst revision score, raised guidance.
 - Catalysts and narrative: news catalyst, headline count, SEC filing catalyst, FDA milestone, data-center narrative, Bitcoin return, mining capacity, peer return.
-- Positioning: float, insider buys, short interest, days to cover, borrow rate, call/put open interest, put-call ratio, call open-interest change.
+- Positioning: float, insider purchase activity, short interest, days to cover, borrow rate, call/put open interest, put-call ratio, call open-interest change.
 - Intraday overlay: optional Alpaca quote/trade/minute data.
 - Enrichment overlay: optional Finnhub or operator CSV research data.
 
@@ -37,10 +37,10 @@ The snapshot model supports these groups:
 
 All archetype scores are clamped between `0` and `100`.
 
-- `A_AI_TECH`: earnings/revenue surprise, revenue acceleration, sector relative strength, insider buying, breakout volume, raised guidance, analyst revisions, trend bonus.
+- `A_AI_TECH`: earnings/revenue surprise, revenue acceleration, sector relative strength, insider purchase activity, breakout volume, raised guidance, analyst revisions, trend bonus.
 - `B_CRYPTO_PIVOT`: Bitcoin strength, catalyst, mining capacity, 200DMA recovery, volume z-score, drawdown recovery, surge bonus.
 - `C_QUANTUM`: low float, small market cap, catalyst, peer return, volume z-score, low nominal price, surge bonus.
-- `D_BIOTECH`: FDA milestone, insider buying, moderate short interest, market-cap range, news catalyst, trend score.
+- `D_BIOTECH`: FDA milestone, insider purchase activity, moderate short interest, market-cap range, news catalyst, trend score.
 - `E_SHORT_SQUEEZE`: short interest, days to cover, borrow rate, call open-interest change, volume z-score, catalyst, surge bonus.
 - `F_PICK_SHOVEL`: data-center narrative, sector relative strength, 200DMA status, EPS/analyst revision, revenue acceleration, breakout volume, trend bonus.
 - `G_TECHNICAL_MOMENTUM`: Yahoo/Stooq EOD trend metrics plus Alpaca intraday surge/relative-volume momentum. Stale sources are disabled.
@@ -111,15 +111,15 @@ Sort order is now:
 - The app is decision support only and does not execute trades.
 - Sample data is intentionally useful for demo verification but should not be treated as live market evidence.
 - Yahoo/Stooq chart data is end-of-day or delayed, not tick-by-tick real time.
-- AI summaries explain the deterministic score; they do not replace the scoring engine.
+- Explanation summaries explain the deterministic score; they do not replace or influence the scoring engine.
 - Production accuracy depends on configured and monitored data providers.
 
 ## UI Localization Finding
 
-Before this review, Korean mode translated static labels but still exposed dynamic English strings from API fields, including archetype names, public labels, rationale, precision notes, data-quality notes, AI summary headings, and expert consensus text.
+Before this review, Korean mode translated static labels but still exposed dynamic English strings from API fields, including archetype names, public labels, rationale, precision notes, data-quality notes, explanation summary headings, and expert consensus text.
 
 Fix applied:
 
 - English mode remains unchanged.
-- Korean mode now translates dynamic status labels, archetypes, coverage labels, source names, rationale bullets, precision notes, warnings, detail-page metric labels, AI summary sections, and expert consensus copy.
+- Korean mode now translates dynamic status labels, archetypes, coverage labels, source names, rationale bullets, precision notes, warnings, detail-page metric labels, explanation summary sections, and expert consensus copy.
 - Ticker symbols and company/security names remain unchanged as requested.

@@ -2,7 +2,7 @@
 
 ## Current Deployment Target
 
-The current release target is a controlled private beta or token-protected public demo. It is not yet a full 1000-user multi-tenant SaaS.
+The current release target is a token-protected owner/operator trial. It is not an unrestricted external-release build and is not a full 1000-user multi-tenant SaaS.
 
 ## Local Private Beta Deployment
 
@@ -19,7 +19,7 @@ python -m vcb_alt self-test
 python -m vcb_alt scan
 ```
 
-## Token-Protected Public Demo
+## Token-Protected Operator Trial
 
 Set:
 
@@ -38,18 +38,18 @@ python -m vcb_alt web --host 0.0.0.0 --port 8765
 
 Open `/?token=<long-random-token>` once to establish the HTTP-only cookie.
 
-For Docker or Render deployment, see `PUBLIC_DEPLOYMENT.md`, `Dockerfile`, and `render.yaml`.
+For Docker, Render, or Vercel operator-trial deployment, see `PUBLIC_DEPLOYMENT.md`, `Dockerfile`, and `render.yaml`.
 
 ## Data Locations
 
 - SQLite DB: `data/vcb_alt.db`
 - Production SaaS DB: managed PostgreSQL/Neon via `VCB_ALT_DATABASE_URL`
 - App logs: `logs/app.log`
-- Exported JSON: operator-chosen path, recommended under `exports/`
+- Exported JSON: operator-chosen path, suggested under `exports/`
 
 ## 1000-User SaaS Deployment Gate
 
-This gate is now enabled for the production control-plane smoke path. Do not open unrestricted public signup until hosted scan-heavy load tests, backup/restore, monitoring, auth hardening, WAF/proxy hardening, and legal review are complete.
+This gate is enabled for the production control-plane smoke path. It is a necessary guard, not a public-readiness approval. Do not open unrestricted signup until Alpaca diagnostics, live market-universe scan verification, hosted scan-heavy load tests, backup/restore, monitoring, auth hardening, WAF/proxy hardening, and legal review are complete.
 
 Required production variables:
 
@@ -90,7 +90,7 @@ The Vercel deployment also includes a daily Hobby-compatible Cron route:
 
 This route stays inert while `VCB_ALT_WORKER_CRON_ENABLED=false`. When enabling it on Vercel, set `CRON_SECRET` and `VCB_ALT_WORKER_TOKEN` to the same long random value so the cron request bearer token can authenticate the worker endpoint.
 
-For hosted load smoke after deployment:
+For historical hosted health-load smoke after deployment:
 
 ```powershell
 python tools/host_load_test.py --url https://stockscreeningver10.vercel.app/api/health --requests 1000 --concurrency 25 --timeout 15
@@ -121,12 +121,13 @@ Copy-Item data\vcb_alt.db backups\vcb_alt_YYYYMMDD.db
 3. Run `python -m vcb_alt doctor`.
 4. Run `python -m vcb_alt admin logs`.
 
-## Public Deployment Blockers
+## External Release Blockers
 
 - Token gate exists, and per-user session APIs now exist, but MFA/OAuth/RBAC are not production complete.
 - No privacy policy or legal review for multi-user investment tooling.
 - Market-data providers have deterministic unit tests and cache behavior tests, but no live contract test in CI.
 - Neon PostgreSQL is configured in Vercel Production for the current control-plane smoke path.
 - Queue APIs, worker command, protected worker endpoint, and Vercel Cron route are wired.
-- Hosted `/api/health` load smoke passed; scan-heavy queue/provider load testing is still pending.
+- Hosted `/api/health` load smoke passed historically; current scan-heavy queue/provider load testing must be rerun after Alpaca live credentials are fixed.
+- Current production Alpaca diagnostics return `ready=false`, so live all-market scans are not operable yet.
 - WAF/proxy hardening and centralized observability are still required.

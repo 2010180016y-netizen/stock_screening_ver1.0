@@ -4,7 +4,7 @@ Last updated: 2026-05-24
 
 ## 1. Goal
 
-Design and execute a safe path from the local CLI private beta to a 1000-user SaaS product without pretending the current CLI can serve public users directly.
+Design and execute a safe path from local owner/operator trial to a 1000-user SaaS product without pretending the current checkout can serve unrestricted public users directly.
 
 ## 2. Architecture Choice
 
@@ -23,15 +23,15 @@ Kubernetes, Kafka, and sharding are not phase-1 requirements for 1000 users.
 
 ## 3. Phase Plan
 
-### Current Checkpoint: Token-Protected Public Demo
+### Historical Checkpoint: Token-Protected Owner/Operator Trial
 
-The current codebase has a Python stdlib web dashboard deployed on Vercel with token-gated access, automatic Yahoo EOD price/volume data, decision-first candidate cards, actionable/excluded grouping, provider metadata, and score detail modals. This is useful for controlled private beta feedback, but it is not yet a 1000-user SaaS.
+The codebase reached a Python stdlib web dashboard deployed on Vercel with token-gated access, EOD price/volume data, decision-first candidate cards, review/monitor grouping, provider metadata, and score detail modals. This is useful for controlled owner/operator feedback, but it is not a public 1000-user SaaS release.
 
-The next gate is `PUBLIC_BETA_SAFETY_LAYER`, which should improve product trust without pretending that full SaaS architecture already exists.
+The current gate is `OWNER_OPERATOR_TRIAL_SAFETY_LAYER`, which should improve product trust without pretending that full SaaS architecture or public-launch approval already exists.
 
 Scope for this gate:
 
-- Add SaaS-safe public labels for candidate status while preserving internal status codes for audit/debugging.
+- Add external-review-safe labels for candidate status while preserving internal status codes for audit/debugging.
 - Add scoring-version visibility to each evaluation result.
 - Add provider status/capability reporting that does not expose secrets.
 - Add starter legal/disclosure documents and link them from the UI.
@@ -39,7 +39,7 @@ Scope for this gate:
 
 Still out of scope for this gate:
 
-- Public signup/login.
+- Unrestricted signup/login.
 - Billing.
 - Per-user watchlists.
 - Multi-tenant PostgreSQL.
@@ -55,7 +55,7 @@ The repository now includes a disabled-by-default SaaS boundary:
 - Basic in-process rate limiting for the stdlib server.
 - Local 1000-user / 30,000-evaluation simulation in `tools/load_test.py`.
 
-This is not yet the final public SaaS runtime. The next infrastructure gate must wire a managed PostgreSQL instance, Redis or edge rate limits, OAuth/email verification, admin MFA, backups, and deployed-host HTTP load tests.
+This is not yet the final unrestricted SaaS runtime. The next infrastructure gate must wire a managed PostgreSQL instance, Redis or edge rate limits, OAuth/email verification, admin MFA, backups, and deployed-host HTTP load tests.
 
 ### 2026-05-21 SaaS Readiness Implementation
 

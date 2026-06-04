@@ -4,9 +4,9 @@ Research date: 2026-05-19 KST
 
 ## Product Direction To Preserve
 
-VCB-Alt should remain a decision-support stock screening desk. It should not become a filter-heavy clone of TradingView or Finviz. The core UX is: fetch market data, evaluate the watchlist, show the few names worth reviewing, explain why, and expose data/operation trust signals.
+VCB-Alt should remain a decision-support stock screening desk. It should not become a filter-heavy clone of TradingView or Finviz. The core UX is: fetch market data, evaluate the watchlist, show the few names worth reviewing, explain why, and expose data/operation trust indicators.
 
-## External User Pain Signals
+## External User Pain Indicators
 
 1. Screener alerts are a recurring unmet need.
    - TradingView community users repeatedly ask for alerts when a new symbol appears in a screener.
@@ -26,7 +26,7 @@ VCB-Alt should remain a decision-support stock screening desk. It should not bec
 
 5. Notification control must be conservative.
    - App Store reviews for stock scanner apps mention excessive notifications and upgrade prompts.
-   - Product implication: future alerts should be opt-in and limited to high-signal events.
+   - Product implication: future alerts should be opt-in and limited to high-importance events.
 
 ## Sources Reviewed
 
@@ -50,7 +50,7 @@ VCB-Alt should remain a decision-support stock screening desk. It should not bec
 
 - Opt-in candidate alerts when a ticker enters or leaves final selection.
 - Saved screen/history view showing last scan versus current scan.
-- Durable user accounts and per-user watchlists before broad public launch.
+- Durable user accounts and per-user watchlists before unrestricted external release.
 - Mobile visual regression tests.
 
 ## 2026-05-19 Expert Consensus For Ticker Detail UX

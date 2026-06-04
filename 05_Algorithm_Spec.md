@@ -174,7 +174,7 @@ f2_passed = any pattern detected
 
 ---
 
-## 5. Step 4: Module 1 v2 Surge Predictor (5 signals, 100 pts)
+## 5. Step 4: Module 1 v2 Surge Predictor (5 factors, 100 pts)
 
 ### BS1: Bollinger Band (200, 2) Squeeze (+20)
 ```
@@ -265,11 +265,11 @@ fired = CRV_score >= 60
 ### 6.2 ICA (Insider Conviction Asymmetry)
 ```
 ICA.1: tier-weighted (CEO×3, CFO×3, EVP×1.5)
-  net_score = sum(insider_buys * tier_weight - insider_sells * tier_weight)
+  net_score = sum(insider_purchases * tier_weight - insider_sells * tier_weight)
   fire if net_score >= 5
 
-ICA.2: 시총 대비 매수액 >= 0.05%
-ICA.3: CEO/CFO 자발적 매수 (binary)
+ICA.2: 시총 대비 내부자 취득액 >= 0.05%
+ICA.3: CEO/CFO 자발적 취득 (binary)
 ICA.4: 180일 자발적 매도 부재
 ICA.5: Quality 13F holder 신규 진입 (Berkshire, GMO 등)
 
@@ -341,7 +341,7 @@ else:
 
 2. Capex-Hiring Divergence:
    CRV 가속 (>70) AND 채용 보통 (<30%)
-   → 자동화 signal
+   → 자동화 factor
    modifier: +8
 
 3. Patent-Product Lag:
@@ -359,7 +359,7 @@ else:
    modifier: +12
 
 6. Insider-Quality Divergence:
-   CEO 매수 (ICA.3) AND 13F quality (ICA.5) 동시
+   CEO 취득 (ICA.3) AND 13F quality (ICA.5) 동시
    modifier: +15
 ```
 
@@ -369,7 +369,7 @@ else:
 def calc_f4_composite(base, modifiers):
     """
     base: F3 v2 composite (0-100)
-    modifiers: dict of additional signals
+    modifiers: dict of additional factors
     """
     base_capped = min(base, 80)  # base cap, modifier 효과 보장
     
@@ -423,9 +423,9 @@ R:R = (upside_target_1 - entry) / (entry - stop)
 ### 8.3 Mode Decision
 ```
 if f3_premium AND r_r >= 5 AND market_mode2_allowed:
-    Mode 2 (STRONG_BUY, size 23%)
+    Mode 2 (HIGH_RESEARCH_CANDIDATE, research size reference 23%)
 elif r_r >= 3:
-    Mode 1 (BUY, size 12%)
+    Mode 1 (RESEARCH_CANDIDATE, research size reference 12%)
 else:
     WAIT
 ```
@@ -440,7 +440,7 @@ else:
 ```
 A1 매출 가속: surprise >= 20% AND 4Q acceleration >= 5pp → +25
 A2 Tech sector RS: 12W vs SPY >= +10pp → +20
-A3 Insider buying: CEO/CFO 90일 >= 2건 → +20
+A3 Insider purchase activity: CEO/CFO 90일 >= 2건 → +20
 A4 Chart base + breakout: 6-24w base + vol 1.5x → +20
 A5 Forward guidance 상향: binary → +15
 
@@ -473,7 +473,7 @@ Score: 0-100
 ```
 D1 FDA milestone (Phase 3 / PDUFA) 30-90일 → +30
 D2 Chart base + volume dry-up → +20
-D3 Insider buying cluster → +15
+D3 Insider purchase activity cluster → +15
 D4 Short interest < 10% (squeeze 회피) → +15
 D5 시총 $50M-$500M → +20
 

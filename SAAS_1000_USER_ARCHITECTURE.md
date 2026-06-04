@@ -46,7 +46,7 @@ flowchart LR
     WORKERS --> OBS
 ```
 
-## 5. Recommended Stack
+## 5. Suggested Stack
 
 ### Application
 
@@ -217,4 +217,3 @@ The product is not ready for 1000 users until:
 - Account deletion/export are verified.
 - Security review and financial/legal review are complete.
 - Observability dashboards exist and alert.
-

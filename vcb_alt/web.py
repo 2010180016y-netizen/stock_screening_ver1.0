@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hmac
 import json
+import sys
+import traceback
 from http.cookies import SimpleCookie
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -21,16 +23,28 @@ from .db import (
     log_operation,
     recent_failures,
     recent_logs,
+    recent_provider_alerts,
     record_failure,
+    record_provider_alert,
     remove_watchlist,
     save_evaluation,
     seed_watchlist,
 )
 from .errors import AppError, ValidationError
-from .job_queue import enqueue_scan_job, get_scan_job, list_scan_jobs, queue_status, run_queued_scan_jobs, validate_job_limit
-from .market_universe import scan_market_universe
+from .job_queue import (
+    enqueue_or_get_market_scan_snapshot,
+    enqueue_scan_job,
+    get_market_scan_job,
+    get_scan_job,
+    list_scan_jobs,
+    queue_status,
+    run_queued_scan_jobs,
+    validate_job_limit,
+)
+from .market_universe import diagnose_alpaca_credentials, scan_market_universe
 from .models import OperationResult, SCORING_VERSION
 from .portfolio import select_portfolio
+from .provider_resilience import provider_alert_payload, provider_health_report
 from .providers import get_price_history, get_snapshot, get_ticker_profile, provider_status
 from .rate_limit import DatabaseRateLimiter, InMemoryRateLimiter
 from .saas_readiness import get_saas_readiness
@@ -56,6 +70,11 @@ from .validation import validate_ticker
 
 _API_RATE_LIMITER = InMemoryRateLimiter()
 _DB_RATE_LIMITER = DatabaseRateLimiter()
+LEGACY_GLOBAL_API_PATHS = {
+    "/api/watchlist": "/api/user/watchlist",
+    "/api/scan": "/api/user/scan",
+    "/api/select": "/api/user/select",
+}
 
 
 def run_web(host: str = "127.0.0.1", port: int = 8765) -> None:
@@ -64,7 +83,7 @@ def run_web(host: str = "127.0.0.1", port: int = 8765) -> None:
         init_db(conn)
         if config.user_auth_enabled:
             init_saas_db(conn)
-        if config.auto_seed_sample and not list_watchlist(conn):
+        if _should_auto_seed_watchlist(config) and not list_watchlist(conn):
             seed_watchlist(conn, SAMPLE_TICKERS)
     handler = _handler_factory(config)
     server = ThreadingHTTPServer((host, port), handler)
@@ -157,7 +176,8 @@ def route_request(handler: BaseHTTPRequestHandler, config: AppConfig, method: st
             OperationResult.failure(exc.message, status_code=exc.status_code, code=exc.code, detail=exc.detail),
             exc.status_code,
         )
-    except Exception:
+    except Exception as exc:
+        traceback.print_exception(type(exc), exc, exc.__traceback__, limit=8, file=sys.stderr)
         _send_json(
             handler,
             OperationResult.failure("Unexpected server error.", status_code=500, code="INTERNAL_ERROR"),
@@ -179,6 +199,11 @@ def handle_api(
         return OperationResult.success("Configuration loaded.", doctor_report(config))
     if method == "GET" and path == "/api/provider-status":
         return OperationResult.success("Provider status loaded.", provider_status(config))
+    if method == "GET" and path == "/api/provider-health":
+        return OperationResult.success("Provider health loaded.", provider_health_report(config))
+    if method == "GET" and path == "/api/provider-diagnostics/alpaca":
+        symbol = parse_qs(query).get("symbol", ["AAPL"])[0]
+        return OperationResult.success("Alpaca diagnostics loaded.", diagnose_alpaca_credentials(config, symbol=symbol))
     if method == "GET" and path == "/api/release-status":
         return OperationResult.success("Release status loaded.", _release_status(config))
     if method == "GET" and path == "/api/ticker-analysis":
@@ -240,23 +265,39 @@ def handle_api(
             user = require_user(conn, _bearer_token(headers or {}))
             if method == "GET":
                 items = list_user_watchlist(conn, user)
-                return OperationResult.success("User watchlist loaded.", {"items": items, "count": len(items)})
+                return OperationResult.success(
+                    "User watchlist loaded.",
+                    {
+                        "items": items,
+                        "count": len(items),
+                        "metadata": _watchlist_metadata(config),
+                    },
+                )
             if method == "POST":
                 body = payload or {}
                 raw = body.get("tickers") or body.get("ticker")
                 tickers = raw.replace(",", " ").split() if isinstance(raw, str) else [str(item) for item in raw or []]
+                data = add_user_watchlist(conn, user, tickers)
+                data["metadata"] = _watchlist_metadata(config)
                 return OperationResult.success(
                     "User watchlist updated.",
-                    add_user_watchlist(conn, user, tickers),
+                    data,
                     status_code=201,
                 )
             if method == "DELETE":
                 ticker = parse_qs(query).get("ticker", [""])[0]
-                return OperationResult.success("User watchlist updated.", remove_user_watchlist(conn, user, ticker))
+                data = remove_user_watchlist(conn, user, ticker)
+                data["metadata"] = _watchlist_metadata(config)
+                return OperationResult.success("User watchlist updated.", data)
         if path == "/api/jobs/scan" and method == "POST":
             if not config.user_auth_enabled or not config.scan_queue_enabled:
                 raise ValidationError("Scan queue is not enabled.")
             user = require_user(conn, _bearer_token(headers or {}))
+            if config.scan_mode == "market_universe":
+                outcome = enqueue_or_get_market_scan_snapshot(config, conn, user)
+                if outcome["state"] == "fresh":
+                    return OperationResult.success("Fresh market scan snapshot loaded.", outcome["report"])
+                return OperationResult.success("Market scan snapshot queued.", outcome, status_code=202)
             return OperationResult.success("Scan job queued.", enqueue_scan_job(conn, user), status_code=202)
         if path == "/api/user/scan" and method in {"GET", "POST"}:
             if not config.user_auth_enabled:
@@ -281,6 +322,12 @@ def handle_api(
             user = require_user(conn, _bearer_token(headers or {}))
             jobs = list_scan_jobs(conn, user)
             return OperationResult.success("Scan jobs loaded.", {"items": jobs, "count": len(jobs)})
+        if path.startswith("/api/jobs/market-scan/") and method == "GET":
+            if not config.user_auth_enabled or not config.scan_queue_enabled:
+                raise ValidationError("Scan queue is not enabled.")
+            require_user(conn, _bearer_token(headers or {}))
+            job_id = path.removeprefix("/api/jobs/market-scan/")
+            return OperationResult.success("Market scan job loaded.", get_market_scan_job(conn, job_id))
         if path.startswith("/api/jobs/") and method == "GET":
             if not config.user_auth_enabled or not config.scan_queue_enabled:
                 raise ValidationError("Scan queue is not enabled.")
@@ -296,11 +343,25 @@ def handle_api(
         if method == "GET" and path == "/api/admin/queue-status":
             user = require_role(require_user(conn, _bearer_token(headers or {})), {"owner", "admin"})
             return OperationResult.success("Queue status loaded.", queue_status(conn, user["tenant_id"]))
-        if config.user_auth_enabled and path in {"/api/watchlist", "/api/scan", "/api/select"}:
-            raise ValidationError("Use tenant-scoped authenticated APIs in SaaS mode.")
+        if method == "GET" and path == "/api/admin/provider-alerts":
+            require_role(require_user(conn, _bearer_token(headers or {})), {"owner", "admin"})
+            limit = int(parse_qs(query).get("limit", ["20"])[0])
+            return OperationResult.success(
+                "Provider alerts loaded.",
+                {"items": recent_provider_alerts(conn, max(1, min(limit, 100)))},
+            )
+        if config.user_auth_enabled and path in LEGACY_GLOBAL_API_PATHS:
+            return _legacy_global_api_result(path)
         if method == "GET" and path == "/api/watchlist":
             items = list_watchlist(conn)
-            return OperationResult.success("Watchlist loaded.", {"items": items, "count": len(items)})
+            return OperationResult.success(
+                "Watchlist loaded.",
+                {
+                    "items": items,
+                    "count": len(items),
+                    "metadata": _watchlist_metadata(config),
+                },
+            )
         if method == "POST" and path == "/api/watchlist":
             body = payload or {}
             raw = body.get("tickers") or body.get("ticker")
@@ -311,11 +372,13 @@ def handle_api(
             else:
                 raise ValidationError("ticker or tickers is required.")
             data = add_watchlist(conn, tickers)
+            data["metadata"] = _watchlist_metadata(config)
             log_operation(conn, "web watchlist add", "success", "Watchlist updated.", data)
             return OperationResult.success("Watchlist updated.", data, status_code=201)
         if method == "DELETE" and path == "/api/watchlist":
             ticker = parse_qs(query).get("ticker", [""])[0]
             data = remove_watchlist(conn, [validate_ticker(ticker)])
+            data["metadata"] = _watchlist_metadata(config)
             log_operation(conn, "web watchlist remove", "success", "Watchlist updated.", data)
             return OperationResult.success("Watchlist updated.", data)
         if method == "GET" and path == "/api/scan":
@@ -385,6 +448,11 @@ def _scan(config: AppConfig, conn: Any, *, message: str = "Scan completed.") -> 
 
 def _scan_user(config: AppConfig, conn: Any, user: dict[str, Any], *, message: str = "Scan completed.") -> OperationResult:
     if config.scan_mode == "market_universe":
+        if config.production_saas_mode and config.scan_queue_enabled:
+            outcome = enqueue_or_get_market_scan_snapshot(config, conn, user)
+            if outcome["state"] == "fresh":
+                return OperationResult.success("Fresh market scan snapshot loaded.", outcome["report"])
+            return OperationResult.success("Market scan snapshot queued.", outcome, status_code=202)
         report = scan_market_universe(config)
         for result in report.evaluations:
             save_user_evaluation(conn, user, result, commit=False)
@@ -429,6 +497,7 @@ def _evaluate_watchlist(config: AppConfig, conn: Any, command: str) -> tuple[lis
         except AppError as exc:
             failure = {"ticker": ticker, "code": exc.code, "message": exc.message}
             record_failure(conn, command, exc.code, exc.message, failure)
+            _record_provider_alert_if_needed(conn, exc, "legacy_watchlist_scan", failure)
             failures.append(failure)
     elapsed_ms = int((perf_counter() - start) * 1000)
     return evaluations, failures, elapsed_ms
@@ -450,10 +519,33 @@ def _evaluate_user_watchlist(
             save_user_evaluation(conn, user, result, commit=False)
             evaluations.append(result)
         except AppError as exc:
-            failures.append({"ticker": ticker, "code": exc.code, "message": exc.message})
+            failure = {"ticker": ticker, "code": exc.code, "message": exc.message}
+            _record_provider_alert_if_needed(conn, exc, "tenant_watchlist_scan", failure)
+            failures.append(failure)
     conn.commit()
     elapsed_ms = int((perf_counter() - start) * 1000)
     return evaluations, failures, elapsed_ms
+
+
+def _record_provider_alert_if_needed(
+    conn: Any,
+    exc: BaseException,
+    context: str,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    alert = provider_alert_payload(exc, context=context, metadata=metadata)
+    if alert is None:
+        return
+    record_provider_alert(
+        conn,
+        alert["provider"],
+        alert["event_type"],
+        alert["severity"],
+        alert["code"],
+        alert["message"],
+        recovery=alert.get("recovery", ""),
+        metadata=alert.get("metadata", {}),
+    )
 
 
 def _release_status(config: AppConfig) -> dict[str, Any]:
@@ -477,6 +569,8 @@ def _release_status(config: AppConfig) -> dict[str, Any]:
             "intraday_provider": status.get("intraday_data_provider"),
             "intraday_ready": live_intraday_ready,
             "ai_summary_provider": status.get("ai_summary_provider"),
+            "summary_provider_label": status.get("summary_provider_label"),
+            "summary_role": status.get("summary_role"),
             "ai_summary_ready": status.get("ai_summary_configured"),
             "scan_mode": config.scan_mode,
             "market_universe_provider": status.get("market_universe_provider"),
@@ -493,7 +587,7 @@ def _release_status(config: AppConfig) -> dict[str, Any]:
             "Open the token-protected dashboard.",
             "Run all-market discovery from the configured market universe.",
             "Use watchlist tickers as an optional manual research list.",
-            "Open ticker detail pages with five-year charts, sector/industry, rationale, and AI summary.",
+            "Open ticker detail pages with five-year charts, sector/industry, rationale, and explanation summary.",
             "Review provider warnings before treating a candidate as research-complete.",
         ],
         "do_not_publicly_launch_until": [
@@ -544,7 +638,7 @@ def _snapshot_metrics(snapshot: Any) -> dict[str, Any]:
         "put_open_interest": getattr(snapshot, "put_open_interest", 0),
         "put_call_ratio": getattr(snapshot, "put_call_ratio", 0),
         "analyst_revision_score": getattr(snapshot, "analyst_revision_score", 0),
-        "analyst_buy_count": getattr(snapshot, "analyst_buy_count", 0),
+        "analyst_positive_rating_count": getattr(snapshot, "analyst_buy_count", 0),
         "analyst_hold_count": getattr(snapshot, "analyst_hold_count", 0),
         "analyst_sell_count": getattr(snapshot, "analyst_sell_count", 0),
         "news_headline_count_30d": getattr(snapshot, "news_headline_count_30d", 0),
@@ -571,13 +665,13 @@ def _analysis_consensus(evaluation: dict[str, Any]) -> list[dict[str, str]]:
             "title": "Score and trend state",
             "body": (
                 f"Combined score is {evaluation['combined_score']} using "
-                f"{evaluation['scoring_version']}; review the trend and surge metrics before acting."
+                f"{evaluation['scoring_version']}; review the trend and surge metrics as research context."
             ),
         },
         {
             "role": "Risk",
-            "title": "Risk reference",
-            "body": "Use the risk reference and allocation guide as review inputs, not trade instructions.",
+            "title": "Risk marker",
+            "body": "Use the risk marker and research size reference as review inputs, not trade instructions.",
         },
         {
             "role": "Product",
@@ -585,6 +679,55 @@ def _analysis_consensus(evaluation: dict[str, Any]) -> list[dict[str, str]]:
             "body": "The first rationale bullets explain the main reason this ticker reached the review list.",
         },
     ]
+
+
+def _watchlist_metadata(config: AppConfig) -> dict[str, Any]:
+    market_wide_primary = config.scan_mode == "market_universe"
+    starter_helper_available = market_wide_primary or config.production_saas_mode
+    return {
+        "purpose": "optional_manual_research",
+        "core_flow": "market_wide_discovery" if market_wide_primary else "manual_watchlist_research",
+        "market_wide_discovery_primary": market_wide_primary,
+        "starter_seeded": _should_auto_seed_watchlist(config),
+        "starter_helper_available": starter_helper_available,
+        "result_boundary": (
+            "Market-wide candidates come from the scan snapshot endpoint, not from the manual watchlist."
+            if market_wide_primary
+            else "Manual watchlist is the active local/private research input."
+        ),
+        "starter_helper": {
+            "mode": "optional_onboarding_helper" if starter_helper_available else "legacy_auto_seed",
+            "tickers": list(SAMPLE_TICKERS) if starter_helper_available else [],
+            "description": (
+                "Optional starter tickers populate only the manual research drawer."
+                if starter_helper_available
+                else "Local legacy watchlist auto-seeding may be enabled."
+            ),
+        },
+        "description": (
+            "Manual watchlist is an optional research drawer. It is not the market-wide discovery result."
+            if market_wide_primary
+            else "Manual watchlist is the active local/private research input."
+        ),
+    }
+
+
+def _legacy_global_api_result(path: str) -> OperationResult:
+    target = LEGACY_GLOBAL_API_PATHS.get(path, "/api/user/*")
+    return OperationResult.failure(
+        f"Legacy global endpoint {path} is disabled in SaaS mode. Use {target} with a tenant session instead.",
+        status_code=410,
+        code="LEGACY_ENDPOINT_GONE",
+        detail=(
+            "Migration required: user_auth_enabled=true routes must use tenant-scoped /api/user/* APIs "
+            "or durable market-snapshot job/status APIs. The legacy global watchlist/scan/select endpoints "
+            "are local/private-mode only."
+        ),
+    )
+
+
+def _should_auto_seed_watchlist(config: AppConfig) -> bool:
+    return bool(config.auto_seed_sample and config.scan_mode != "market_universe" and not config.production_saas_mode)
 
 
 def _read_json(handler: BaseHTTPRequestHandler) -> dict[str, Any] | None:
@@ -696,6 +839,7 @@ def _requires_shared_token(path: str, config: AppConfig) -> bool:
             "/api/admin/users",
             "/api/admin/audit-events",
             "/api/admin/queue-status",
+            "/api/admin/provider-alerts",
         }
         or path.startswith("/api/jobs/")
     ):
@@ -779,6 +923,7 @@ def _is_tenant_authenticated_path(path: str) -> bool:
             "/api/admin/users",
             "/api/admin/audit-events",
             "/api/admin/queue-status",
+            "/api/admin/provider-alerts",
         }
         or path.startswith("/api/jobs/")
     )
@@ -846,6 +991,25 @@ def _dashboard_js() -> str:
     global _SAFE_APP_JS
     if _SAFE_APP_JS is None:
         source = _replace_js_ko_block(APP_JS, "const I18N =", APP_KO_I18N)
+        source = _replace_js_const_object(source, "const KO_DYNAMIC =", "\n\nfunction isKo", APP_KO_DYNAMIC)
+        source = _replace_js_function_block(source, "function setLanguage", "function initLanguageToggle", APP_SET_LANGUAGE_JS)
+        source = _replace_js_function_block(source, "function translateText", "function translateReadinessDecision", APP_TRANSLATE_TEXT_JS)
+        source = _replace_js_function_block(source, "function translateReadinessDecision", "function showNotice", APP_READINESS_JS)
+        source = _replace_js_function_block(
+            source,
+            "async function ensureStarterWatchlist",
+            "async function loadConfig",
+            APP_STARTER_WATCHLIST_JS,
+        )
+        source = _replace_js_function_block(source, "async function loadConfig", "async function loadWatchlist", APP_LOAD_CONFIG_JS)
+        source = _replace_js_function_block(source, "async function loadWatchlist", "async function loadOps", APP_LOAD_WATCHLIST_JS)
+        source = _replace_js_function_block(source, "async function loadOps", "async function addTickers", APP_LOAD_OPS_JS)
+        source = _replace_js_function_block(source, "async function addTickers", "async function removeTicker", APP_ADD_TICKERS_JS)
+        source = _replace_js_function_block(source, "async function removeTicker", "async function runScan", APP_REMOVE_TICKER_JS)
+        source = _replace_js_function_block(source, "async function runScan", "function renderScan", APP_RUN_SCAN_JS)
+        source = _replace_js_function_block(source, "function renderSelection", "async function refreshAll", APP_RENDER_SELECTION_JS)
+        source = _replace_js_function_block(source, "async function bootstrap", "function renderTable", APP_BOOTSTRAP_JS)
+        source = _replace_js_function_block(source, "function updateDataStatus", "function reasonItems", APP_UPDATE_DATA_STATUS_JS)
         _SAFE_APP_JS = _replace_render_scan_i18n(source)
     return _SAFE_APP_JS
 
@@ -853,7 +1017,9 @@ def _dashboard_js() -> str:
 def _detail_js() -> str:
     global _SAFE_DETAIL_JS
     if _SAFE_DETAIL_JS is None:
-        _SAFE_DETAIL_JS = _replace_js_ko_block(DETAIL_JS, "const DETAIL_I18N =", DETAIL_KO_I18N)
+        source = _replace_js_ko_block(DETAIL_JS, "const DETAIL_I18N =", DETAIL_KO_I18N)
+        source = _replace_js_const_object(source, "const DETAIL_KO_DYNAMIC =", "\n\nfunction isDetailKo", DETAIL_KO_DYNAMIC)
+        _SAFE_DETAIL_JS = _replace_js_function_block(source, "function detailText", "function tickerFromPath", DETAIL_TEXT_JS)
     return _SAFE_DETAIL_JS
 
 
@@ -867,6 +1033,18 @@ def _replace_render_scan_i18n(source: str) -> str:
     start = source.index("  document.getElementById('actionable-meta').textContent", source.index("function renderScan"))
     end = source.index("  renderTable('actionable-body'", start)
     return source[:start] + APP_RENDER_SCAN_I18N + source[end:]
+
+
+def _replace_js_const_object(source: str, marker: str, next_marker: str, replacement: str) -> str:
+    start = source.index(marker)
+    end = source.index(next_marker, start)
+    return source[:start] + replacement + source[end:]
+
+
+def _replace_js_function_block(source: str, marker: str, next_marker: str, replacement: str) -> str:
+    start = source.index(marker)
+    end = source.index(next_marker, start)
+    return source[:start] + replacement + source[end:]
 
 
 APP_KO_I18N = """  ko: {
@@ -883,7 +1061,10 @@ APP_KO_I18N = """  ko: {
     run_scan: '스캔 실행',
     select_final: '최종 3개 선정',
     refresh: '새로고침',
-    watchlist: '관심 종목',
+    watchlist: '보조 수동 연구',
+    watchlist_drawer_label: '보조 패널',
+    watchlist_help: '수동 목록은 시장 전체 탐색 결과와 별개이며 추천을 자동 시딩하지 않습니다.',
+    starter_research: '선택적 시작 연구 목록 추가',
     operations: '운영 상태',
     decision_first: '의사결정 우선 대시보드',
     entry_candidates: '진입 후보',
@@ -910,7 +1091,7 @@ APP_KO_I18N = """  ko: {
     failures: '실패',
     selection_completed: '선정이 {ms} ms 안에 완료되었습니다.',
     no_eligible: '조건을 충족하는 후보가 없습니다. 관심 종목 품질을 확인하거나 데이터 갱신 후 다시 실행하세요.',
-    allocation_guide: '배분 가이드',
+    allocation_guide: '검토 규모 참고',
     no_excluded: '제외된 종목이 없습니다.',
     no_actionable: '진입 검토 후보가 없습니다.',
     provider: '데이터 제공자',
@@ -934,17 +1115,17 @@ DETAIL_KO_I18N = """  ko: {
     dashboard: '대시보드',
     five_year_chart: '최근 5년 가격과 거래량',
     current_status: '현재 상태',
-    ai_summary: 'AI 요약',
+    ai_summary: '설명 요약',
     industry_profile: '업종 및 종목 정보',
     selection_reason: '종목 선정 이유',
     expert_consensus: '전문가 합의 분석',
     required_review: '필수 검토 항목',
     score: '점수',
     review_state: '검토 상태',
-    allocation_guide: '배분 가이드',
+    allocation_guide: '검토 규모 참고',
     risk_reference: '위험 기준',
-    return_12w: '12주 수익률',
-    return_12m: '12개월 수익률',
+    return_12w: '12주 가격 변화',
+    return_12m: '12개월 가격 변화',
     drawdown_52w: '52주 낙폭',
     trend_score: '추세 점수',
     surge_score: '급등 점수',
@@ -963,10 +1144,725 @@ DETAIL_KO_I18N = """  ko: {
     no_chart: '차트 데이터가 없습니다.',
     close_range: '종가 범위 {min} - {max}',
     why_selected: '선정 이유',
-    signals: '긍정 신호',
+    positive_factors: '긍정 요인',
     risks: '위험 요인',
     to: '~'
   }"""
+
+
+APP_KO_I18N = """  ko: {
+    access_required: '접근 권한 필요',
+    access_help: '운영자가 설정한 배포 접근 토큰을 입력하세요.',
+    access_token: '접근 토큰',
+    open_dashboard: '대시보드 열기',
+    dashboard_title: '시장 전체 종목 탐색',
+    data_not_loaded: '데이터 기준: 불러오지 않음',
+    provider_not_loaded: '제공자: 불러오지 않음',
+    ops_checking: '운영 상태: 확인 중',
+    discovery_primary_label: '시장 전체 탐색',
+    discovery_primary_title: '시장 전체에서 최신 연구 후보를 확인',
+    discovery_primary_help: '워커가 작성한 최신 스냅샷을 즉시 읽거나, 없으면 하나의 지속형 스캔 작업을 큐에 넣습니다.',
+    scan_freshness: '스캔 신선도',
+    provider_source: '데이터 제공자',
+    data_coverage: '데이터 커버리지',
+    fail_closed: '실데이터 보호 상태',
+    no_snapshot_yet: '아직 스냅샷 없음',
+    queued_snapshot: '스냅샷 생성 대기 중',
+    fresh_snapshot: '최신 스냅샷 사용 중',
+    stale_snapshot: '스냅샷 갱신 필요',
+    coverage_pending: '대기 중',
+    fail_closed_active: '실데이터 없으면 후보 미노출',
+    rationale_visible: '후보별 선정 근거 표시',
+    add_tickers: '연구용 티커 추가',
+    add: '추가',
+    run_scan: '시장 전체 스캔/최신 후보 확인',
+    select_final: '선정 후보 다시 계산',
+    refresh: '상태 새로고침',
+    watchlist: '보조 수동 연구',
+    watchlist_drawer_label: '보조 패널',
+    watchlist_help: '수동 목록은 시장 전체 탐색 결과와 별개이며 추천을 자동 시딩하지 않습니다.',
+    starter_research: '선택적 시작 연구 목록 추가',
+    optional_research: '보조 연구 목록',
+    operations: '운영 상태',
+    decision_first: '시장 전체 후보 검토',
+    entry_candidates: '최신 연구 후보',
+    final_selection: '선정 연구 세트',
+    run_selection_empty: '시장 전체 스캔을 실행하면 최신 선정 연구 세트가 표시됩니다.',
+    actionable_setups: '연구 후보',
+    ticker: '티커',
+    archetype: '유형',
+    score: '점수',
+    status: '상태',
+    allocation: '검토 비중',
+    data: '데이터',
+    reason: '이유',
+    run_scan_empty: '시장 전체 스캔을 실행하면 후보가 표시됩니다.',
+    monitor_excluded: '모니터링 또는 제외',
+    lower_confidence_empty: '스캔 후 낮은 신뢰도의 시장 종목이 여기에 표시됩니다.',
+    legal_notice: '의사결정 보조용입니다. 자동 매매를 실행하지 않습니다.',
+    risk_disclosure: '위험 고지',
+    privacy: '개인정보',
+    terms: '약관',
+    ready: '준비됨',
+    running: '실행 중',
+    not_run: '미실행',
+    failures: '실패',
+    selection_completed: '선정 계산이 {ms} ms 안에 완료되었습니다.',
+    no_eligible: '조건을 충족한 후보가 없습니다. 실데이터 커버리지를 확인하거나 데이터 갱신 후 다시 실행하세요.',
+    allocation_guide: '검토 규모 참고',
+    no_excluded: '제외된 종목이 없습니다.',
+    no_actionable: '연구 후보가 없습니다.',
+    provider: '제공자',
+    data_as_of: '데이터 기준',
+    ops_success: '운영 상태: 정상',
+    ops_provider_issues: '운영 상태: 제공자 이슈 {count}건'
+  }"""
+
+
+APP_RENDER_SCAN_I18N = """  document.getElementById('actionable-meta').textContent = state.lang === 'ko'
+    ? `${items.length}개 중 ${actionable.length}개 연구 후보 / ${elapsedMs} ms`
+    : `${actionable.length} research candidates / ${items.length} in ${elapsedMs} ms`;
+  document.getElementById('excluded-meta').textContent = state.lang === 'ko'
+    ? `${excluded.length}개 모니터링`
+    : `${excluded.length} monitoring`;
+"""
+
+
+DETAIL_KO_I18N = """  ko: {
+    ticker_analysis: '종목 분석',
+    dashboard: '대시보드',
+    five_year_chart: '최근 5년 가격과 거래량',
+    current_status: '현재 상태',
+    ai_summary: '설명 요약',
+    industry_profile: '업종 및 종목 정보',
+    selection_reason: '선정 이유',
+    expert_consensus: '전문가 검토 항목',
+    required_review: '필수 검토 세트',
+    score: '점수',
+    review_state: '검토 상태',
+    allocation_guide: '검토 규모 참고',
+    risk_reference: '위험 기준',
+    return_12w: '12주 가격 변화',
+    return_12m: '12개월 가격 변화',
+    drawdown_52w: '52주 낙폭',
+    trend_score: '추세 점수',
+    surge_score: '급등 점수',
+    rs_vs_spy: 'SPY 대비 상대강도',
+    intraday: '장중 시세',
+    short_interest: '공매도 비율',
+    options_pcr: '옵션 풋/콜 비율',
+    analyst_score: '애널리스트 점수',
+    data_coverage: '데이터 커버리지',
+    coverage_state: '커버리지 상태',
+    sector: '섹터',
+    industry: '업종',
+    company: '회사명',
+    data_note: '데이터 안내',
+    daily_points: '일봉 {count}개 / {freshness}',
+    no_chart: '차트 데이터가 없습니다.',
+    close_range: '종가 범위 {min} - {max}',
+    why_selected: '선정 근거',
+    positive_factors: '긍정 요인',
+    risks: '위험 요인',
+    to: '~'
+  }"""
+
+
+APP_KO_DYNAMIC = """const KO_DYNAMIC = {
+  archetypes: {
+    A_AI_TECH: 'AI/기술 메가트렌드',
+    B_CRYPTO_PIVOT: '가상자산 전환',
+    C_QUANTUM: '양자/신흥 기술',
+    D_BIOTECH: '바이오 촉매',
+    E_SHORT_SQUEEZE: '숏 스퀴즈',
+    F_PICK_SHOVEL: 'AI 인프라 수혜',
+    G_TECHNICAL_MOMENTUM: '기술적 모멘텀'
+  },
+  publicLabels: {
+    'High-priority review candidate': '우선 연구 후보',
+    'High-priority research candidate': '우선 연구 후보',
+    'Review candidate': '연구 후보',
+    'Research candidate': '연구 후보',
+    'Monitor only': '모니터링 후보',
+    'Monitoring candidate': '모니터링 후보',
+    'Needs review': '검토 필요',
+    'High-scoring watchlist candidate': '고득점 연구 후보',
+    'High-scoring research candidate': '고득점 연구 후보',
+    'Watchlist candidate': '연구 후보',
+    'No current setup': '현재 조건 미충족'
+  },
+  coverageLabels: {
+    'multi-source': '다중 데이터',
+    enriched: '보강 데이터',
+    'price-volume-only': '가격/거래량 한정',
+    insufficient: '부족',
+    unknown: '알 수 없음'
+  },
+  sources: {
+    sample: '샘플',
+    'sample-placeholder': '샘플 대체값',
+    yahoo: 'Yahoo',
+    yahoo_chart: 'Yahoo 차트',
+    stooq: 'Stooq',
+    manual: '수동 CSV',
+    finnhub: 'Finnhub',
+    alpaca: 'Alpaca',
+    'alpaca-intraday': 'Alpaca 장중',
+    template: '템플릿 설명',
+    'template-fallback': '템플릿 설명 대체',
+    'template summary': '템플릿 설명',
+    'template summary fallback': '템플릿 설명 대체',
+    'OpenAI explanation summary': 'OpenAI 설명 요약',
+    'deterministic-vcb-alt-v1': '결정론 점수 템플릿 v1',
+    openai: 'OpenAI 설명',
+    local: '로컬'
+  },
+  modes: {
+    offline: '오프라인',
+    operator_csv: '운영자 CSV',
+    eod_market_data: '일봉 시장 데이터',
+    market_universe: '시장 전체 탐색',
+    unknown: '알 수 없음'
+  },
+  dataQuality: {
+    offline: '오프라인',
+    'eod-market': '일봉 시장 데이터',
+    'partial-eod-market': '부분 일봉 시장 데이터',
+    'thin-eod-market': '부족한 일봉 시장 데이터',
+    'stale-eod-market': '오래된 일봉 시장 데이터'
+  },
+  rejectionReasons: {
+    'Score below entry threshold.': '점수가 연구 후보 기준보다 낮습니다.',
+    'Monitor only.': '모니터링 후보입니다.',
+    'Portfolio slot limit reached.': '선정 후보 수 한도에 도달했습니다.',
+    'Duplicate primary archetype avoided.': '동일한 주요 유형의 중복 선정을 피했습니다.',
+    'High-volatility archetype limit reached.': '고변동성 유형 한도에 도달했습니다.',
+    'Total suggested exposure limit reached.': '총 검토 비중 한도에 도달했습니다.'
+  }
+};"""
+
+
+APP_TRANSLATE_TEXT_JS = """function translateText(value, item = {}) {
+  const text = String(value || '');
+  if (!isKo() || !text) return text;
+  let match = text.match(/^Primary archetype is (.+) with base score ([-0-9.]+)\\.$/);
+  if (match) return `주요 유형은 ${archetypeLabel(item)}이며 기본 점수는 ${match[2]}점입니다.`;
+  match = text.match(/^Complexity modifier is ([-0-9.]+); combined score is ([-0-9.]+)\\.$/);
+  if (match) return `복합 보정값은 ${match[1]}점이며 최종 점수는 ${match[2]}점입니다.`;
+  match = text.match(/^Data quality: (.+)\\.$/);
+  if (match) return `데이터 품질: ${translateDataQuality(match[1])}.`;
+  match = text.match(/^Trend template score: ([-0-9.]+)\\/100\\.$/);
+  if (match) return `추세 점수는 100점 만점에 ${match[1]}점입니다.`;
+  match = text.match(/^Surge score: ([-0-9.]+)\\/100\\.$/);
+  if (match) return `급등 점수는 100점 만점에 ${match[1]}점입니다.`;
+  match = text.match(/^Data coverage: ([-0-9.]+)\\/100 \\(([^)]+)\\)\\. (.+)$/);
+  if (match) return `데이터 커버리지는 100점 만점에 ${match[1]}점(${coverageLabel(match[2])})입니다. ${translateText(match[3], item)}`;
+  match = text.match(/^Missing: (.+)\\.$/);
+  if (match) return `부족한 데이터: ${translateMissingList(match[1])}.`;
+  match = text.match(/^Research enrichment applied from (.+) as of (.+)\\.$/);
+  if (match) return `리서치 보강 데이터가 ${translateSource(match[1])}에서 적용되었습니다. 기준 시점은 ${match[2]}입니다.`;
+  match = text.match(/^Intraday quote layer: (.+) price (.+) as of (.+)\\.$/);
+  if (match) return `장중 시세 계층: ${translateSource(match[1])} 가격 ${match[2]}, 기준 시각 ${match[3]}.`;
+  match = text.match(/^(.+) score is ([-0-9.]+)\\.$/);
+  if (match) return `${archetypeLabel(item)} 점수는 ${match[2]}점입니다.`;
+  match = text.match(/^Allocation guide is ([-0-9.]+)%\\.$/);
+  if (match) return `검토 비중 가이드는 ${match[1]}%입니다.`;
+  const exact = {
+    'Score is above the MVP portfolio-manager threshold of 55.': '점수가 내부 연구 후보 기준인 55점을 넘었습니다.',
+    'Score passed the numeric threshold, but final selection is blocked until enrichment data is present.':
+      '점수 기준은 통과했지만 보강 데이터가 없어서 최종 선정은 보류됩니다.',
+    'Score is below the MVP portfolio-manager threshold of 55; wait.': '점수가 내부 연구 후보 기준인 55점보다 낮아 대기합니다.',
+    'Decision support only; not a trading instruction.': '의사결정 보조 정보이며 매매 지시가 아닙니다.',
+    'No automatic trading is performed.': '자동 매매는 실행되지 않습니다.',
+    'Result uses sample/offline data, not live market data.': '이 결과는 실시간 시장 데이터가 아니라 샘플/오프라인 데이터를 사용합니다.',
+    'High-volatility archetype: avoid stacking multiple simultaneous positions.':
+      '고변동성 유형입니다. 여러 고변동성 포지션을 동시에 겹치지 않도록 검토하세요.',
+    ['Market-data provider supplies EOD price/volume only; '
+      + 'fundamentals and catalysts remain unavailable unless research data is configured.']:
+      '시장 데이터 제공자는 일봉 가격/거래량만 제공합니다. 리서치 데이터가 설정되지 않으면 재무와 촉매 데이터는 비어 있습니다.',
+    'Required market, fundamental, catalyst, and positioning groups present.': '시장, 재무, 촉매, 포지셔닝 데이터 그룹이 모두 존재합니다.',
+    'Entry threshold is met.': '연구 후보 기준을 충족했습니다.',
+    'Entry threshold is not met.': '연구 후보 기준을 충족하지 못했습니다.',
+    'Data coverage is below the final-selection gate.': '데이터 커버리지가 최종 선정 기준보다 낮습니다.',
+    'Current provider supplies end-of-day/delayed chart data, not tick-by-tick real-time data.':
+      '현재 제공자는 틱 단위 실시간 데이터가 아니라 일봉/지연 차트 데이터를 제공합니다.',
+    ...KO_DYNAMIC.rejectionReasons
+  };
+  return exact[text] || text;
+}
+
+function translateMissingList(value) {
+  return String(value || '')
+    .replaceAll('market price/volume', '시장 가격/거래량')
+    .replaceAll('fundamentals/earnings', '재무/실적')
+    .replaceAll('catalyst/news', '촉매/뉴스')
+    .replaceAll('float/short/options/insider positioning', '유통주식/공매도/옵션/내부자 포지셔닝');
+}
+
+"""
+
+
+APP_READINESS_JS = """function translateReadinessDecision(value) {
+  if (!isKo()) return value || '';
+  const labels = {
+    READY_FOR_PRIVATE_BETA: '제한된 내부 베타 가능',
+    NOT_READY: '출시 불가',
+    NOT_READY_FOR_1000_USER_SAAS: '1000명 SaaS 공개 전 보완 필요'
+  };
+  return labels[value] || value || '';
+}
+
+"""
+
+
+APP_SET_LANGUAGE_JS = """function setLanguage(lang) {
+  state.lang = lang === 'ko' ? 'ko' : 'en';
+  localStorage.setItem('vcb_lang', state.lang);
+  applyTranslations();
+  if (state.config && state.providerStatus) {
+    const mode = state.providerStatus.capabilities?.mode || state.providerStatus.scan_mode || 'unknown';
+    document.getElementById('provider').textContent = isKo()
+      ? `${translateSource(state.providerStatus.provider)} 데이터`
+      : `${state.providerStatus.provider} data`;
+    document.getElementById('data-source').textContent =
+      `${t('provider')}: ${translateSource(state.providerStatus.provider)} / ${translateMode(mode)}`;
+    document.getElementById('provider-source').textContent =
+      `${translateSource(state.providerStatus.provider)} / ${translateMode(mode)}`;
+  }
+  if (state.selection) renderSelection(state.selection, state.selection.elapsed_ms || 0);
+  if (state.scan.length) renderScan(state.scan);
+  updateDataStatus([...(state.scan || []), ...((state.selection && state.selection.selected) || [])], state.failures || []);
+  updateDiscoverySummary({ items: state.scan, selection: state.selection, failures: state.failures });
+  if (state.config) {
+    loadWatchlist().catch(() => {});
+    loadOps().catch(() => {});
+  }
+}
+
+"""
+
+
+APP_STARTER_WATCHLIST_JS = """async function ensureStarterWatchlist() {
+  return;
+}
+
+async function seedStarterResearchList() {
+  setBusy(true);
+  try {
+    const data = await api(endpoint('/api/watchlist', '/api/user/watchlist'), {
+      method: 'POST',
+      body: JSON.stringify({ tickers: starterTickers(), source: 'optional_onboarding_helper' })
+    });
+    showNotice(state.lang === 'ko'
+      ? `보조 연구 목록에 추가됨: ${data.added.join(', ') || '없음'}; 기존: ${data.existing.join(', ') || '없음'}`
+      : `Starter research list added: ${data.added.join(', ') || 'none'}; existing: ${data.existing.join(', ') || 'none'}`);
+    await loadWatchlist();
+  } catch (error) {
+    showNotice(error.message, true);
+  } finally {
+    setBusy(false);
+  }
+}
+
+"""
+
+
+APP_LOAD_CONFIG_JS = """async function loadConfig() {
+  const [config, providerStatus] = await Promise.all([
+    api('/api/config'),
+    api('/api/provider-status')
+  ]);
+  state.config = config;
+  state.providerStatus = providerStatus;
+  const mode = providerStatus.capabilities?.mode || providerStatus.scan_mode || 'unknown';
+  document.getElementById('provider').textContent = isKo()
+    ? `${translateSource(providerStatus.provider)} 데이터`
+    : `${providerStatus.provider} data`;
+  document.getElementById('data-source').textContent =
+    `${t('provider')}: ${translateSource(providerStatus.provider)} / ${translateMode(mode)}`;
+  document.getElementById('provider-source').textContent =
+    `${translateSource(providerStatus.provider)} / ${translateMode(mode)}`;
+  document.getElementById('coverage-state').textContent = t('coverage_pending');
+  document.getElementById('fail-closed-state').textContent =
+    config.market_scan_requires_live_data ? t('fail_closed_active') : (isKo() ? '로컬/데모 대체 데이터 허용' : 'Local/demo fallback allowed');
+  document.getElementById('ops-state').textContent = config.external_api_enabled
+    ? (isKo() ? '운영 상태: 외부 데이터 활성화' : 'Operational status: external data enabled')
+    : (isKo() ? '운영 상태: 오프라인/샘플 모드' : 'Operational status: offline/sample mode');
+}
+
+"""
+
+
+APP_LOAD_WATCHLIST_JS = """async function loadWatchlist() {
+  const data = await api(endpoint('/api/watchlist', '/api/user/watchlist'));
+  const metadata = data.metadata || {};
+  const starterButton = document.getElementById('starter-research-button');
+  if (starterButton) starterButton.hidden = metadata.starter_helper_available === false;
+  document.getElementById('watchlist-count').textContent = state.lang === 'ko'
+    ? `${data.count}개 보조`
+    : `${data.count} optional`;
+  const target = document.getElementById('watchlist');
+  if (!data.items.length) {
+    const boundary = metadata.result_boundary
+      ? `<div class="empty-state">${escapeHtml(metadata.result_boundary)}</div>`
+      : '';
+    target.innerHTML = boundary + `<div class="empty-state">${state.lang === 'ko'
+      ? '보조 연구가 필요할 때만 티커를 추가하세요.'
+      : 'Add tickers only when you need secondary manual research.'}</div>`;
+    return;
+  }
+  const helper = metadata.market_wide_discovery_primary
+    ? `<div class="empty-state">${state.lang === 'ko'
+        ? '아래 목록은 시장 전체 추천 결과가 아니라 보조 연구 목록입니다.'
+        : 'This list is secondary research, not the market-wide discovery result.'}</div>`
+    : '';
+  target.innerHTML = helper + data.items.map((item) => `
+    <div class="ticker-row">
+      <strong>${escapeHtml(item.ticker)}</strong>
+      <button type="button" data-remove="${escapeHtml(item.ticker)}">${state.lang === 'ko' ? '삭제' : 'Remove'}</button>
+    </div>
+  `).join('');
+  target.querySelectorAll('[data-remove]').forEach((button) => {
+    button.addEventListener('click', () => removeTicker(button.dataset.remove));
+  });
+}
+
+"""
+
+
+APP_LOAD_OPS_JS = """async function loadOps() {
+  const [readiness, failures] = await Promise.all([
+    api('/api/saas-readiness'),
+    api('/api/failures')
+  ]);
+  state.failures = failures.items || [];
+  document.getElementById('failure-count').textContent = `${failures.count} ${t('failures')}`;
+  const opsState = document.getElementById('ops-state');
+  opsState.className = `status-dot ${failures.count ? 'warn' : 'good'}`;
+  opsState.textContent = failures.count
+    ? (state.lang === 'ko' ? '운영 상태: 실패 감지' : 'Operational status: failures detected')
+    : t('ops_success');
+  document.getElementById('readiness').innerHTML = `
+    <strong>${escapeHtml(translateReadinessDecision(readiness.decision))}</strong><br>
+    ${state.lang === 'ko'
+      ? '운영자 시험 사용은 가능합니다. 공개 SaaS 출시는 인증, 영구 저장소, 부하 테스트, 법무 검토가 더 필요합니다.'
+      : 'Owner/operator trial is available. Public SaaS launch still requires auth hardening, '
+        + 'durable operations, load testing, and legal review.'}
+  `;
+  const target = document.getElementById('failures');
+  target.innerHTML = failures.items.length
+    ? failures.items.map((item) => `<div>${escapeHtml(item.created_at)}: ${escapeHtml(item.message)}</div>`).join('')
+    : `<div>${state.lang === 'ko' ? '최근 실패가 없습니다.' : 'No recent failures.'}</div>`;
+}
+
+"""
+
+
+APP_ADD_TICKERS_JS = """async function addTickers(event) {
+  event.preventDefault();
+  const input = document.getElementById('ticker-input');
+  const tickers = input.value.trim();
+  if (!tickers) return;
+  setBusy(true);
+  try {
+    const data = await api(endpoint('/api/watchlist', '/api/user/watchlist'), { method: 'POST', body: JSON.stringify({ tickers }) });
+    input.value = '';
+    showNotice(state.lang === 'ko'
+      ? `추가됨: ${data.added.join(', ') || '없음'}; 기존: ${data.existing.join(', ') || '없음'}`
+      : `Added: ${data.added.join(', ') || 'none'}; existing: ${data.existing.join(', ') || 'none'}`);
+    await loadWatchlist();
+  } catch (error) {
+    showNotice(error.message, true);
+  } finally {
+    setBusy(false);
+  }
+}
+
+"""
+
+
+APP_REMOVE_TICKER_JS = """async function removeTicker(ticker) {
+  setBusy(true);
+  try {
+    await api(`${endpoint('/api/watchlist', '/api/user/watchlist')}?ticker=${encodeURIComponent(ticker)}`, { method: 'DELETE' });
+    showNotice(state.lang === 'ko' ? `${ticker} 삭제됨.` : `${ticker} removed.`);
+    await loadWatchlist();
+  } catch (error) {
+    showNotice(error.message, true);
+  } finally {
+    setBusy(false);
+  }
+}
+
+"""
+
+
+APP_RUN_SCAN_JS = """async function runScan() {
+  setBusy(true);
+  try {
+    const data = await api(endpoint('/api/scan', '/api/user/scan'), { method: state.config?.user_auth_enabled ? 'POST' : 'GET' });
+    if (!Array.isArray(data.items)) {
+      const job = data.job || {};
+      const status = data.status || job.status || 'queued';
+      updateDiscoverySummary(data);
+      showNotice(state.lang === 'ko'
+        ? `시장 전체 스캔 스냅샷 작업 상태: ${status}`
+        : `Market scan snapshot status: ${status}`);
+      await loadOps();
+      return;
+    }
+    state.scan = data.items;
+    state.failures = data.failures || [];
+    renderScan(data.items, data.elapsed_ms);
+    if (data.selection) {
+      state.selection = data.selection;
+      state.selection.elapsed_ms = data.elapsed_ms;
+      renderSelection(data.selection, data.elapsed_ms);
+    }
+    updateDataStatus(data.items, data.failures || []);
+    updateDiscoverySummary(data);
+    showNotice(state.lang === 'ko' ? `시장 전체 스캔이 ${data.elapsed_ms} ms 안에 완료되었습니다.` : `Market scan completed in ${data.elapsed_ms} ms.`);
+    await loadOps();
+  } catch (error) {
+    document.getElementById('fail-closed-state').textContent = state.lang === 'ko'
+      ? '실데이터 보호: 후보 미노출'
+      : 'fail-closed: candidates blocked';
+    showNotice(error.message, true);
+  } finally {
+    setBusy(false);
+  }
+}
+
+"""
+
+
+APP_RENDER_SELECTION_JS = """function renderSelection(selection, elapsedMs) {
+  document.getElementById('selection-meta').textContent =
+    isKo()
+      ? `${selection.selected.length}/${selection.max_positions}, 총 ${selection.total_size_pct}%, ${elapsedMs} ms`
+      : `${selection.selected.length}/${selection.max_positions}, ${selection.total_size_pct}% in ${elapsedMs} ms`;
+  const target = document.getElementById('selection');
+  if (!selection.selected.length) {
+    target.innerHTML = `<div class="empty-state">${t('no_eligible')}</div>`;
+    return;
+  }
+  target.innerHTML = selection.selected.map((item, index) => `
+    <article class="candidate-card clickable" data-ticker="${escapeHtml(item.ticker)}"
+      aria-label="${escapeHtml(item.ticker)} ${escapeHtml(publicLabel(item))}">
+      <div class="candidate-top">
+        <div class="ticker-lockup">
+          <div class="rank">${index + 1}</div>
+          <div class="ticker-symbol">${escapeHtml(item.ticker)}</div>
+        </div>
+        <div class="score">${item.combined_score}<small>${t('score')}</small></div>
+      </div>
+      <div class="candidate-meta">
+        ${escapeHtml(archetypeLabel(item))} / ${escapeHtml(publicLabel(item))}
+      </div>
+      <div class="candidate-data-row">
+        <span>${t('data_coverage')}: ${item.data_coverage_score || 0}/100 (${escapeHtml(coverageLabel(item.data_coverage_label))})</span>
+        <span>${t('provider')}: ${escapeHtml(translateSource(item.source))}</span>
+      </div>
+      <ul class="reason-list">
+        ${reasonItems(item).slice(0, 3).map((reason) => `<li>${escapeHtml(translateText(reason, item))}</li>`).join('')}
+      </ul>
+      <div class="candidate-foot">
+        <span>${t('allocation_guide')} ${item.suggested_size_pct}%</span>
+        <span>${escapeHtml(item.data_as_of)} / ${escapeHtml(item.scoring_version)}</span>
+      </div>
+    </article>
+  `).join('');
+  wireDetailRows();
+}
+
+"""
+
+
+APP_BOOTSTRAP_JS = """async function bootstrap() {
+  await refreshAll();
+}
+
+function updateDiscoverySummary(data = {}) {
+  const snapshot = data.snapshot || {};
+  const items = Array.isArray(data.items) ? data.items : [];
+  const selected = data.selection && Array.isArray(data.selection.selected) ? data.selection.selected : [];
+  const combined = [...items, ...selected];
+  const status = snapshot.status || data.status || data.state || '';
+  if (status === 'fresh' || snapshot.served_from === 'durable_snapshot') {
+    document.getElementById('scan-freshness').textContent = snapshot.completed_at
+      ? `${t('fresh_snapshot')} / ${snapshot.completed_at}`
+      : t('fresh_snapshot');
+  } else if (status === 'queued' || status === 'pending' || data.job) {
+    document.getElementById('scan-freshness').textContent = t('queued_snapshot');
+  } else if (!combined.length) {
+    document.getElementById('scan-freshness').textContent = t('no_snapshot_yet');
+  }
+  if (combined.length) {
+    const providers = [...new Set(combined.map((item) => item.source).filter(Boolean))];
+    if (providers.length) document.getElementById('provider-source').textContent = providers.map(translateSource).join(', ');
+    const coverageValues = combined.map((item) => Number(item.data_coverage_score || 0)).filter((value) => value >= 0);
+    const average = coverageValues.length
+      ? Math.round(coverageValues.reduce((total, value) => total + value, 0) / coverageValues.length)
+      : 0;
+    document.getElementById('coverage-state').textContent = `${average}/100`;
+  }
+  const liveRequired = state.config && state.config.market_scan_requires_live_data;
+  document.getElementById('fail-closed-state').textContent = liveRequired
+    ? t('fail_closed_active')
+    : (isKo() ? '로컬/데모 대체 데이터 허용' : 'Local/demo fallback allowed');
+}
+
+"""
+
+
+APP_UPDATE_DATA_STATUS_JS = """function updateDataStatus(items, failures = []) {
+  const validDates = items.map((item) => item.data_as_of).filter(Boolean).sort();
+  const latest = validDates.length ? validDates[validDates.length - 1] : (isKo() ? '불러오지 않음' : 'not loaded');
+  const providers = [...new Set(items.map((item) => item.source).filter(Boolean))];
+  document.getElementById('data-as-of').textContent = `${t('data_as_of')}: ${latest}`;
+  if (providers.length) {
+    document.getElementById('data-source').textContent =
+      `${t('provider')}: ${providers.map(translateSource).join(', ')}`;
+    document.getElementById('provider-source').textContent = providers.map(translateSource).join(', ');
+  }
+  if (items.length) {
+    const coverageValues = items.map((item) => Number(item.data_coverage_score || 0)).filter((value) => value >= 0);
+    const average = coverageValues.length
+      ? Math.round(coverageValues.reduce((total, value) => total + value, 0) / coverageValues.length)
+      : 0;
+    document.getElementById('coverage-state').textContent = `${average}/100`;
+  }
+  const opsState = document.getElementById('ops-state');
+  opsState.className = `status-dot ${failures.length ? 'warn' : 'good'}`;
+  opsState.textContent = failures.length ? t('ops_provider_issues', { count: failures.length }) : t('ops_success');
+}
+
+"""
+
+
+DETAIL_KO_DYNAMIC = """const DETAIL_KO_DYNAMIC = {
+  archetypes: {
+    A_AI_TECH: 'AI/기술 메가트렌드',
+    B_CRYPTO_PIVOT: '가상자산 전환',
+    C_QUANTUM: '양자/신흥 기술',
+    D_BIOTECH: '바이오 촉매',
+    E_SHORT_SQUEEZE: '숏 스퀴즈',
+    F_PICK_SHOVEL: 'AI 인프라 수혜',
+    G_TECHNICAL_MOMENTUM: '기술적 모멘텀'
+  },
+  publicLabels: {
+    'High-priority review candidate': '우선 연구 후보',
+    'High-priority research candidate': '우선 연구 후보',
+    'Review candidate': '연구 후보',
+    'Research candidate': '연구 후보',
+    'Monitor only': '모니터링 후보',
+    'Monitoring candidate': '모니터링 후보',
+    'Needs review': '검토 필요',
+    'High-scoring watchlist candidate': '고득점 연구 후보',
+    'High-scoring research candidate': '고득점 연구 후보',
+    'Watchlist candidate': '연구 후보',
+    'No current setup': '현재 조건 미충족'
+  },
+  coverageLabels: {
+    'multi-source': '다중 데이터',
+    enriched: '보강 데이터',
+    'price-volume-only': '가격/거래량 한정',
+    insufficient: '부족',
+    unknown: '알 수 없음'
+  },
+  sources: {
+    sample: '샘플',
+    'sample-placeholder': '샘플 대체값',
+    yahoo: 'Yahoo',
+    yahoo_chart: 'Yahoo 차트',
+    stooq: 'Stooq',
+    manual: '수동 CSV',
+    finnhub: 'Finnhub',
+    alpaca: 'Alpaca',
+    'alpaca-intraday': 'Alpaca 장중',
+    template: '템플릿 설명',
+    'template-fallback': '템플릿 설명 대체',
+    'template summary': '템플릿 설명',
+    'template summary fallback': '템플릿 설명 대체',
+    'OpenAI explanation summary': 'OpenAI 설명 요약',
+    'deterministic-vcb-alt-v1': '결정론 점수 템플릿 v1',
+    openai: 'OpenAI 설명',
+    local: '로컬'
+  },
+  dataQuality: {
+    offline: '오프라인',
+    'eod-market': '일봉 시장 데이터',
+    'partial-eod-market': '부분 일봉 시장 데이터',
+    'thin-eod-market': '부족한 일봉 시장 데이터',
+    'stale-eod-market': '오래된 일봉 시장 데이터'
+  },
+  consensusRoles: {
+    Quant: '정량',
+    Risk: '위험',
+    Product: '제품'
+  },
+  consensusTitles: {
+    'Score and trend state': '점수와 추세 상태',
+    'Risk marker': '위험 참고',
+    'Selection reason': '선정 이유'
+  }
+};"""
+
+
+DETAIL_TEXT_JS = """function detailText(value, item = {}) {
+  const text = String(value || '');
+  if (!isDetailKo() || !text) return text;
+  let match = text.match(/^Primary archetype is (.+) with base score ([-0-9.]+)\\.$/);
+  if (match) return `주요 유형은 ${detailArchetypeLabel(item)}이며 기본 점수는 ${match[2]}점입니다.`;
+  match = text.match(/^Complexity modifier is ([-0-9.]+); combined score is ([-0-9.]+)\\.$/);
+  if (match) return `복합 보정값은 ${match[1]}점이며 최종 점수는 ${match[2]}점입니다.`;
+  match = text.match(/^Data quality: (.+)\\.$/);
+  if (match) return `데이터 품질: ${detailDataQuality(match[1])}.`;
+  match = text.match(/^Trend template score: ([-0-9.]+)\\/100\\.$/);
+  if (match) return `추세 점수는 100점 만점에 ${match[1]}점입니다.`;
+  match = text.match(/^Surge score: ([-0-9.]+)\\/100\\.$/);
+  if (match) return `급등 점수는 100점 만점에 ${match[1]}점입니다.`;
+  match = text.match(/^Data coverage: ([-0-9.]+)\\/100 \\(([^)]+)\\)\\. (.+)$/);
+  if (match) return `데이터 커버리지는 100점 만점에 ${match[1]}점(${detailCoverageLabel(match[2])})입니다. ${detailText(match[3], item)}`;
+  match = text.match(/^Missing: (.+)\\.$/);
+  if (match) return `부족한 데이터: ${detailMissingList(match[1])}.`;
+  match = text.match(/^Research enrichment applied from (.+) as of (.+)\\.$/);
+  if (match) return `리서치 보강 데이터가 ${detailSource(match[1])}에서 적용되었습니다. 기준 시점은 ${match[2]}입니다.`;
+  match = text.match(/^Intraday quote layer: (.+) price (.+) as of (.+)\\.$/);
+  if (match) return `장중 시세 계층: ${detailSource(match[1])} 가격 ${match[2]}, 기준 시각 ${match[3]}.`;
+  match = text.match(/^Composite score is above the internal review threshold\\.$/);
+  if (match) return '종합 점수가 내부 검토 기준을 넘었습니다.';
+  match = text.match(/^12-week momentum is positive at (.+)%\\.$/);
+  if (match) return `12주 모멘텀이 +${match[1]}%로 양호합니다.`;
+  match = text.match(/^Analyst\\/revision score is positive at (.+)\\.$/);
+  if (match) return `애널리스트 추정치 수정 점수가 ${match[1]}점으로 양호합니다.`;
+  match = text.match(/^Call open interest is greater than put open interest\\.$/);
+  if (match) return '콜 옵션 미결제약정이 풋 옵션보다 큽니다.';
+  match = text.match(/^Short interest is elevated at (.+)%\\.$/);
+  if (match) return `공매도 비율이 ${match[1]}%로 높습니다.`;
+  const exact = {
+    'Score is above the MVP portfolio-manager threshold of 55.': '점수가 내부 연구 후보 기준인 55점을 넘었습니다.',
+    'Score passed the numeric threshold, but final selection is blocked until enrichment data is present.':
+      '점수 기준은 통과했지만 보강 데이터가 없어서 최종 선정은 보류됩니다.',
+    'Score is below the MVP portfolio-manager threshold of 55; wait.': '점수가 내부 연구 후보 기준인 55점보다 낮아 대기합니다.',
+    'Decision support only; not a trading instruction.': '의사결정 보조 정보이며 매매 지시가 아닙니다.',
+    'No automatic trading is performed.': '자동 매매는 실행되지 않습니다.',
+    'Result uses sample/offline data, not live market data.': '이 결과는 실시간 시장 데이터가 아니라 샘플/오프라인 데이터를 사용합니다.',
+    'High-volatility archetype: avoid stacking multiple simultaneous positions.':
+      '고변동성 유형입니다. 여러 고변동성 포지션을 동시에 겹치지 않도록 검토하세요.',
+    ['Market-data provider supplies EOD price/volume only; '
+      + 'fundamentals and catalysts remain unavailable unless research data is configured.']:
+      '시장 데이터 제공자는 일봉 가격/거래량만 제공합니다. 리서치 데이터가 설정되지 않으면 재무와 촉매 데이터는 비어 있습니다.',
+    'Required market, fundamental, catalyst, and positioning groups present.': '시장, 재무, 촉매, 포지셔닝 데이터 그룹이 모두 존재합니다.',
+    'Data coverage is below the final-selection gate.': '데이터 커버리지가 최종 선정 기준보다 낮습니다.',
+    'Current provider supplies end-of-day/delayed chart data, not tick-by-tick real-time data.':
+      '현재 제공자는 틱 단위 실시간 데이터가 아니라 일봉/지연 차트 데이터를 제공합니다.',
+    'No selection rationale is available for this ticker.': '이 종목의 선정 근거가 없습니다.'
+  };
+  return exact[text] || text;
+}
+
+"""
 
 
 LOGIN_HTML = """<!doctype html>
@@ -996,7 +1892,7 @@ LOGIN_HTML = """<!doctype html>
 
 
 # The dashboard intentionally keeps the user-supplied dark operations-desk direction,
-# but all candidate values come from the API so public beta users never see static demo scores.
+# but all candidate values come from the API so owner-trial users never see static demo scores.
 INDEX_HTML = """<!doctype html>
 <html lang="en">
 <head>
@@ -1028,28 +1924,69 @@ INDEX_HTML = """<!doctype html>
       <span id="ops-state" class="status-dot good" data-i18n="ops_checking">Operational status: checking</span>
     </section>
 
-    <section class="toolbar" aria-label="Screening actions">
-      <form id="add-form" class="ticker-form">
-        <label for="ticker-input" data-i18n="add_tickers">Manual watchlist</label>
-        <input id="ticker-input" name="tickers" autocomplete="off" placeholder="PLTR MSTR VST">
-        <button type="submit" data-i18n="add">Add</button>
-      </form>
-      <button id="scan-button" type="button" data-i18n="run_scan">Scan market</button>
-      <button id="select-button" type="button" data-i18n="select_final">Select final 3</button>
-      <button id="refresh-button" type="button" data-i18n="refresh">Refresh</button>
+    <section class="discovery-hero" aria-label="Market-wide discovery">
+      <div class="hero-copy">
+        <p class="eyebrow" data-i18n="discovery_primary_label">Market-wide discovery</p>
+        <h2 data-i18n="discovery_primary_title">Find the latest research candidates across the market</h2>
+        <p data-i18n="discovery_primary_help">
+          The worker-owned market scan reads the latest fresh snapshot or queues one durable scan job.
+        </p>
+      </div>
+      <div class="hero-actions">
+        <button id="scan-button" class="primary-cta" type="button" data-i18n="run_scan">
+          Scan full market / latest candidates
+        </button>
+        <button id="select-button" class="secondary" type="button" data-i18n="select_final">
+          Rebuild selected set
+        </button>
+        <button id="refresh-button" class="secondary" type="button" data-i18n="refresh">Refresh status</button>
+      </div>
+    </section>
+
+    <section class="discovery-summary" aria-label="Market scan status">
+      <article class="summary-card">
+        <span data-i18n="scan_freshness">Scan freshness</span>
+        <strong id="scan-freshness" data-i18n="no_snapshot_yet">No snapshot yet</strong>
+      </article>
+      <article class="summary-card">
+        <span data-i18n="provider_source">Provider source</span>
+        <strong id="provider-source">-</strong>
+      </article>
+      <article class="summary-card">
+        <span data-i18n="data_coverage">Data coverage</span>
+        <strong id="coverage-state" data-i18n="coverage_pending">Pending</strong>
+      </article>
+      <article class="summary-card">
+        <span data-i18n="fail_closed">Fail-closed state</span>
+        <strong id="fail-closed-state">-</strong>
+      </article>
     </section>
 
     <section id="notice" class="notice" hidden></section>
 
     <div class="workspace">
-      <aside class="sidebar" aria-label="Watchlist and operations">
-        <section class="panel watchlist-panel">
-          <div class="panel-head">
-          <h2 data-i18n="watchlist">Manual watchlist</h2>
-          <span id="watchlist-count">0</span>
-          </div>
+      <aside class="sidebar" aria-label="Secondary research and operations">
+        <details class="panel watchlist-panel secondary-research-panel">
+          <summary class="panel-head">
+            <span>
+              <span data-i18n="watchlist">Optional manual research</span>
+              <small data-i18n="watchlist_drawer_label">Secondary drawer</small>
+            </span>
+            <span id="watchlist-count">0</span>
+          </summary>
+          <p class="panel-note" data-i18n="watchlist_help">
+            Optional watchlist notes are separate from the market-wide discovery result and never seed candidate output automatically.
+          </p>
+          <button id="starter-research-button" class="secondary starter-helper" type="button" data-i18n="starter_research">
+            Add optional starter research list
+          </button>
+          <form id="add-form" class="ticker-form">
+            <label for="ticker-input" data-i18n="add_tickers">Add research tickers</label>
+            <input id="ticker-input" name="tickers" autocomplete="off" placeholder="PLTR MSTR VST">
+            <button type="submit" class="secondary" data-i18n="add">Add</button>
+          </form>
           <div id="watchlist" class="watchlist"></div>
-        </section>
+        </details>
 
         <section class="panel ops-panel">
           <div class="panel-head">
@@ -1064,19 +2001,22 @@ INDEX_HTML = """<!doctype html>
       <section class="decision-area">
         <div class="section-head">
           <div>
-            <p class="eyebrow" data-i18n="decision_first">Decision-first dashboard</p>
-            <h2><span data-i18n="entry_candidates">Entry candidates</span> <span data-i18n="final_selection">Final selection</span></h2>
+            <p class="eyebrow" data-i18n="decision_first">Market-wide candidate review</p>
+            <h2>
+              <span data-i18n="entry_candidates">Latest research candidates</span>
+              <span data-i18n="final_selection">Selected research set</span>
+            </h2>
           </div>
           <span id="selection-meta" class="pill">Not run</span>
         </div>
 
         <section id="selection" class="candidate-grid" aria-label="Final selection">
-          <div class="empty-state" data-i18n="run_selection_empty">Run selection to see final candidates.</div>
+          <div class="empty-state" data-i18n="run_selection_empty">Scan the market to see the latest selected research set.</div>
         </section>
 
         <section class="panel scan-panel">
           <div class="panel-head">
-            <h2 data-i18n="actionable_setups">Actionable setups</h2>
+            <h2 data-i18n="actionable_setups">Research candidates</h2>
             <span id="actionable-meta">Not run</span>
           </div>
           <div class="table-wrap">
@@ -1194,7 +2134,7 @@ DETAIL_HTML = """<!doctype html>
 
       <section class="panel">
         <div class="panel-head">
-          <h2 data-i18n="ai_summary">AI summary</h2>
+          <h2 data-i18n="ai_summary">Explanation summary</h2>
           <span id="ai-provider">Loading</span>
         </div>
         <div id="ai-summary-body" class="analysis-block"></div>
@@ -1243,16 +2183,19 @@ TERMS_HTML = """<!doctype html>
   <main class="doc-shell">
     <p class="eyebrow">VCB-Alt Screening Desk</p>
     <h1>Terms Of Use</h1>
-    <p>This starter document is an operational placeholder and must be reviewed by qualified counsel before broad public launch.</p>
+    <p>
+      This owner/operator-trial document is an operational placeholder and must be reviewed by qualified counsel before
+      public, paid, or investment-advice-adjacent launch.
+    </p>
     <h2>Decision Support Only</h2>
     <p>
       VCB-Alt provides screening workflow output for user review.
-      It does not provide personalized investment advice, execute trades, manage assets, or guarantee outcomes.
+      It does not provide trading instructions, execute trades, manage assets, or promise outcomes.
     </p>
     <h2>User Responsibility</h2>
     <p>Users are responsible for verifying data, assessing suitability, and making their own final decisions.</p>
     <h2>Service Limits</h2>
-    <p>The current deployment is a token-protected beta. Availability, data freshness, and provider access may vary.</p>
+    <p>The current deployment is an owner/operator trial. Availability, data freshness, and provider access may vary.</p>
     <p><a href="/">Back to dashboard</a></p>
   </main>
 </body>
@@ -1272,10 +2215,13 @@ PRIVACY_HTML = """<!doctype html>
   <main class="doc-shell">
     <p class="eyebrow">VCB-Alt Screening Desk</p>
     <h1>Privacy Notice</h1>
-    <p>This starter notice is an operational placeholder and must be legally reviewed before broad public launch.</p>
+    <p>
+      This owner/operator-trial notice is an operational placeholder and must be legally reviewed before public, paid,
+      or investment-advice-adjacent launch.
+    </p>
     <h2>Current Data</h2>
     <p>
-      The beta stores watchlist tickers, evaluation outputs, operation logs, and failed-job records.
+      The trial stores watchlist tickers, evaluation outputs, operation logs, and failed-job records.
       It does not require brokerage credentials.
     </p>
     <h2>Secrets</h2>
@@ -1301,7 +2247,10 @@ RISK_DISCLOSURE_HTML = """<!doctype html>
   <main class="doc-shell">
     <p class="eyebrow">VCB-Alt Screening Desk</p>
     <h1>Risk Disclosure</h1>
-    <p>This starter disclosure is not legal advice and must be reviewed before public launch.</p>
+    <p>
+      This owner/operator-trial disclosure is not legal advice and must be reviewed before public, paid, or
+      trading-instruction-adjacent launch.
+    </p>
     <h2>Market Risk</h2>
     <p>Stocks can lose value quickly. High-volatility archetypes can move sharply and may be unsuitable for many users.</p>
     <h2>Data Risk</h2>
@@ -1310,7 +2259,7 @@ RISK_DISCLOSURE_HTML = """<!doctype html>
       Price/volume-only providers do not supply fundamentals, news, short interest, or options data.
     </p>
     <h2>Model Risk</h2>
-    <p>Scores are heuristic research signals. They can be wrong, incomplete, or misinterpreted.</p>
+    <p>Scores are deterministic research indicators. They can be wrong, incomplete, or misinterpreted.</p>
     <p><a href="/">Back to dashboard</a></p>
   </main>
 </body>
@@ -1423,16 +2372,60 @@ h2 { font-size: 16px; }
 }
 .status-dot.warn::before { background: var(--warn); }
 .status-dot.bad::before { background: var(--bad); }
-.toolbar {
+.discovery-hero {
   display: grid;
-  grid-template-columns: minmax(260px, 1fr) repeat(3, max-content);
-  gap: 10px;
-  align-items: end;
-  padding: 14px 24px;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, max-content);
+  gap: 18px;
+  align-items: center;
+  padding: 18px 24px;
   border-bottom: 1px solid var(--line);
   background: var(--panel);
 }
-.ticker-form { display: grid; grid-template-columns: 90px 1fr max-content; gap: 8px; align-items: center; }
+.hero-copy { min-width: 0; }
+.hero-copy h2 { font-size: 24px; line-height: 1.2; margin-bottom: 6px; }
+.hero-copy p:last-child { margin: 0; color: var(--muted); line-height: 1.45; }
+.hero-actions { display: flex; gap: 10px; align-items: center; justify-content: flex-end; flex-wrap: wrap; min-width: 0; }
+.primary-cta {
+  min-width: min(100%, 300px);
+  height: 44px;
+  font-size: 15px;
+}
+.discovery-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--line);
+  background: #121615;
+}
+.summary-card {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-deep);
+  padding: 10px 12px;
+}
+.summary-card span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  font-weight: 700;
+  margin-bottom: 5px;
+}
+.summary-card strong {
+  display: block;
+  font-size: 13px;
+  line-height: 1.35;
+}
+.ticker-form {
+  display: grid;
+  grid-template-columns: 1fr max-content;
+  gap: 8px;
+  align-items: end;
+  padding: 0 14px 12px;
+}
+.ticker-form label { grid-column: 1 / -1; }
 label { color: var(--muted); font-size: 13px; }
 input {
   height: 38px;
@@ -1539,6 +2532,36 @@ button:disabled { opacity: 0.55; cursor: wait; }
   overflow: hidden;
 }
 .sidebar .panel { border-width: 0 0 1px 0; border-radius: 0; box-shadow: none; overflow: hidden; min-height: 0; }
+.secondary-research-panel {
+  background: var(--panel-deep);
+}
+.secondary-research-panel summary {
+  cursor: pointer;
+  list-style: none;
+}
+.secondary-research-panel summary::-webkit-details-marker {
+  display: none;
+}
+.secondary-research-panel summary::after {
+  content: "+";
+  color: var(--muted);
+  font-weight: 800;
+}
+.secondary-research-panel[open] summary::after {
+  content: "-";
+}
+.secondary-research-panel small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  margin-top: 3px;
+}
+.starter-helper {
+  width: calc(100% - 28px);
+  margin: 0 14px 12px;
+  height: auto;
+  min-height: 36px;
+}
 .muted-panel { opacity: 0.86; }
 .panel-head {
   min-height: 48px;
@@ -1551,6 +2574,13 @@ button:disabled { opacity: 0.55; cursor: wait; }
   min-width: 0;
 }
 .watchlist, .selection-list, .ops-list, .readiness { padding: 12px 14px; }
+.panel-note {
+  margin: 0;
+  padding: 12px 14px 8px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
 .watchlist { overflow-y: auto; max-height: calc(100vh - 260px); }
 .ticker-row {
   display: flex;
@@ -1610,6 +2640,20 @@ button:disabled { opacity: 0.55; cursor: wait; }
   border-bottom: 1px solid var(--line);
   padding-bottom: 10px;
   font-size: 13px;
+}
+.candidate-data-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.candidate-data-row span {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-deep);
+  padding: 7px 8px;
+  min-width: 0;
 }
 .reason-list {
   display: grid;
@@ -1692,11 +2736,26 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; }
 .metric-box span { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; margin-bottom: 4px; }
 .metric-box strong { display: block; font-size: 18px; line-height: 1.2; }
 @media (max-width: 900px) {
-  .topbar, .toolbar, .ticker-form, .workspace, .section-head { display: block; }
-  .topbar, .metadata-bar, .toolbar, .decision-area, .detail-layout, .legal-footer { padding-left: 14px; padding-right: 14px; }
+  .topbar, .ticker-form, .section-head { display: block; }
+  .workspace { display: flex; flex-direction: column; }
+  .topbar,
+  .metadata-bar,
+  .discovery-hero,
+  .discovery-summary,
+  .decision-area,
+  .detail-layout,
+  .legal-footer {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
   .status-strip { justify-content: flex-start; margin-top: 12px; }
-  .toolbar > *, .ticker-form > * { width: 100%; margin-bottom: 8px; }
-  .sidebar { display: block; border-right: 0; }
+  .discovery-hero { display: grid; grid-template-columns: 1fr; }
+  .hero-actions { justify-content: stretch; }
+  .hero-actions > * { width: 100%; }
+  .discovery-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ticker-form > * { width: 100%; margin-bottom: 8px; }
+  .decision-area { order: 1; }
+  .sidebar { display: block; border-right: 0; order: 2; }
   .watchlist { max-height: none; }
   .candidate-grid { grid-template-columns: 1fr; }
   .metadata-bar { display: grid; }
@@ -1705,6 +2764,7 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; }
   .chart-wrap { min-height: 260px; padding: 10px; }
   #price-chart { min-height: 240px; }
   .candidate-top { flex-wrap: wrap; }
+  .candidate-data-row { grid-template-columns: 1fr; }
   .score { text-align: left; }
   table { min-width: 0; table-layout: auto; }
   thead { display: none; }
@@ -1734,9 +2794,11 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; }
 }
 @media (max-width: 520px) {
   h1 { font-size: 22px; }
+  .hero-copy h2 { font-size: 20px; }
   .section-head h2 { font-size: 22px; }
   .ticker-symbol, .score { font-size: 24px; }
   .detail-grid { grid-template-columns: 1fr; }
+  .discovery-summary { grid-template-columns: 1fr; }
   .panel-head { align-items: flex-start; flex-direction: column; }
   td { grid-template-columns: 1fr; }
   .language-toggle { width: 100%; }
@@ -1767,18 +2829,37 @@ const I18N = {
     data_not_loaded: 'Data as of: not loaded',
     provider_not_loaded: 'Provider: not loaded',
     ops_checking: 'Operational status: checking',
-    add_tickers: 'Manual watchlist',
+    discovery_primary_label: 'Market-wide discovery',
+    discovery_primary_title: 'Find the latest research candidates across the market',
+    discovery_primary_help: 'The worker-owned market scan reads the latest fresh snapshot or queues one durable scan job.',
+    scan_freshness: 'Scan freshness',
+    provider_source: 'Provider source',
+    data_coverage: 'Data coverage',
+    fail_closed: 'Fail-closed state',
+    no_snapshot_yet: 'No snapshot yet',
+    queued_snapshot: 'Snapshot queued',
+    fresh_snapshot: 'Fresh snapshot',
+    stale_snapshot: 'Refresh needed',
+    coverage_pending: 'Pending',
+    fail_closed_active: 'Live data required',
+    rationale_visible: 'Candidate rationale visible',
+    add_tickers: 'Add research tickers',
     add: 'Add',
-    run_scan: 'Scan market',
-    select_final: 'Select final 3',
-    refresh: 'Refresh',
-    watchlist: 'Manual watchlist',
+    run_scan: 'Scan full market / latest candidates',
+    select_final: 'Rebuild selected set',
+    refresh: 'Refresh status',
+    watchlist: 'Optional manual research',
+    watchlist_drawer_label: 'Secondary drawer',
+    watchlist_help: 'Manual watchlist notes are separate from the market-wide discovery result '
+      + 'and never seed candidate output automatically.',
+    starter_research: 'Add optional starter research list',
+    optional_research: 'Optional research list',
     operations: 'Operations',
-    decision_first: 'Decision-first dashboard',
-    entry_candidates: 'Entry candidates',
-    final_selection: 'Final selection',
-    run_selection_empty: 'Run selection to see final candidates.',
-    actionable_setups: 'Actionable setups',
+    decision_first: 'Market-wide candidate review',
+    entry_candidates: 'Latest research candidates',
+    final_selection: 'Selected research set',
+    run_selection_empty: 'Scan the market to see the latest selected research set.',
+    actionable_setups: 'Research candidates',
     ticker: 'Ticker',
     archetype: 'Archetype',
     score: 'Score',
@@ -1799,7 +2880,7 @@ const I18N = {
     failures: 'failures',
     selection_completed: 'Selection completed in {ms} ms.',
     no_eligible: 'No eligible candidates. Check live data coverage or run again after data refresh.',
-    allocation_guide: 'Allocation guide',
+    allocation_guide: 'Research size reference',
     no_excluded: 'No excluded names.',
     no_actionable: 'No actionable setups.',
     provider: 'Provider',
@@ -1848,7 +2929,7 @@ const I18N = {
     failures: '실패',
     selection_completed: '선정이 {ms} ms 안에 완료되었습니다.',
     no_eligible: '조건을 충족하는 후보가 없습니다. 관심 종목 품질을 확인하거나 데이터 갱신 후 다시 실행하세요.',
-    allocation_guide: '배분 가이드',
+    allocation_guide: '검토 규모 참고',
     no_excluded: '제외된 종목이 없습니다.',
     no_actionable: '진입 검토 후보가 없습니다.',
     provider: '데이터 제공자',
@@ -1924,10 +3005,14 @@ const KO_DYNAMIC = {
   },
   publicLabels: {
     'High-priority review candidate': '우선 검토 후보',
+    'High-priority research candidate': '우선 연구 후보',
     'Review candidate': '검토 후보',
+    'Research candidate': '연구 후보',
     'Monitor only': '관찰 대상',
+    'Monitoring candidate': '모니터링 후보',
     'Needs review': '검토 필요',
     'High-scoring watchlist candidate': '고득점 관심 후보',
+    'High-scoring research candidate': '고득점 연구 후보',
     'Watchlist candidate': '관심 후보',
     'No current setup': '현재 조건 미충족'
   },
@@ -1948,8 +3033,12 @@ const KO_DYNAMIC = {
     finnhub: '핀허브',
     alpaca: '알파카',
     'alpaca-intraday': '알파카 장중',
-    template: '템플릿',
-    openai: 'OpenAI',
+    template: '템플릿 설명',
+    'template summary': '템플릿 설명',
+    'template summary fallback': '템플릿 설명 대체',
+    'OpenAI explanation summary': 'OpenAI 설명 요약',
+    'deterministic-vcb-alt-v1': '결정론 점수 템플릿 v1',
+    openai: 'OpenAI 설명',
     local: '로컬'
   },
   modes: {
@@ -2054,7 +3143,13 @@ function translateText(value, item = {}) {
     'Score passed the numeric threshold, but final selection is blocked until enrichment data is present.':
       '점수 기준은 통과했지만 보강 데이터가 없어서 최종 선정은 보류됩니다.',
     'Score is below the MVP portfolio-manager threshold of 55; wait.': '점수가 MVP 포트폴리오 관리 기준인 55점보다 낮아 대기합니다.',
-    'Decision support only; not investment advice.': '의사결정 보조 정보일 뿐 투자 자문이 아닙니다.',
+    'Deterministic scoring and portfolio constraints select research candidates; the summary layer only explains the scoring result.':
+      '결정론 점수화와 포트폴리오 제약이 리서치 후보를 선정하며, 요약 레이어는 점수화 결과를 설명만 합니다.',
+    'The summary provider explains deterministic scoring output and does not select stocks.':
+      '요약 제공자는 결정론 점수화 결과를 설명하며 종목을 선정하지 않습니다.',
+    'This text explains deterministic scoring output; it is not the selection engine.':
+      '이 문구는 결정론 점수화 결과를 설명하며 선정 엔진이 아닙니다.',
+    'Decision support only; not a trading instruction.': '의사결정 보조 정보일 뿐 매매 지시가 아닙니다.',
     'No automatic trading is performed.': '자동 매매는 실행하지 않습니다.',
     'Result uses sample/offline data, not live market data.': '이 결과는 실시간 시장 데이터가 아니라 샘플/오프라인 데이터를 사용합니다.',
     'High-volatility archetype: avoid stacking multiple simultaneous positions.':
@@ -2075,8 +3170,7 @@ function translateText(value, item = {}) {
 function translateReadinessDecision(value) {
   if (!isKo()) return value || '';
   const labels = {
-    READY_FOR_PRIVATE_BETA: '비공개 베타 가능',
-    READY_FOR_PUBLIC_BETA: '공개 베타 가능',
+    READY_FOR_PRIVATE_BETA: '내부 베타 가능',
     NOT_READY: '출시 불가',
     NOT_READY_FOR_1000_USER_SAAS: '1000명 SaaS 공개 전 보완 필요'
   };
@@ -2164,10 +3258,24 @@ async function ensureUserSession() {
 }
 
 async function ensureStarterWatchlist() {
-  if (!state.config || !state.config.user_auth_enabled) return;
-  const data = await api('/api/user/watchlist');
-  if (!data.items.length) {
-    await api('/api/user/watchlist', { method: 'POST', body: JSON.stringify({ tickers: starterTickers() }) });
+  return;
+}
+
+async function seedStarterResearchList() {
+  setBusy(true);
+  try {
+    const data = await api(endpoint('/api/watchlist', '/api/user/watchlist'), {
+      method: 'POST',
+      body: JSON.stringify({ tickers: starterTickers(), source: 'optional_onboarding_helper' })
+    });
+    showNotice(state.lang === 'ko'
+      ? `보조 연구 목록에 추가됨: ${data.added.join(', ') || '없음'}; 기존: ${data.existing.join(', ') || '없음'}`
+      : `Starter research list added: ${data.added.join(', ') || 'none'}; existing: ${data.existing.join(', ') || 'none'}`);
+    await loadWatchlist();
+  } catch (error) {
+    showNotice(error.message, true);
+  } finally {
+    setBusy(false);
   }
 }
 
@@ -2269,6 +3377,15 @@ async function runScan() {
   setBusy(true);
   try {
     const data = await api(endpoint('/api/scan', '/api/user/scan'), { method: state.config?.user_auth_enabled ? 'POST' : 'GET' });
+    if (!Array.isArray(data.items)) {
+      const job = data.job || {};
+      const status = data.status || job.status || 'queued';
+      showNotice(state.lang === 'ko'
+        ? `시장 스캔 스냅샷 작업 상태: ${status}`
+        : `Market scan snapshot status: ${status}`);
+      await loadOps();
+      return;
+    }
     state.scan = data.items;
     renderScan(data.items, data.elapsed_ms);
     if (data.selection) {
@@ -2457,7 +3574,7 @@ function openDetail(ticker) {
       <div class="metric-box"><span>${t('score')}</span><strong>${item.combined_score}</strong></div>
       <div class="metric-box"><span>${isKo() ? '검토 상태' : 'Review state'}</span><strong>${escapeHtml(publicLabel(item))}</strong></div>
       <div class="metric-box"><span>${t('allocation_guide')}</span><strong>${item.suggested_size_pct}%</strong></div>
-      <div class="metric-box"><span>${isKo() ? '위험 기준' : 'Risk reference'}</span><strong>${item.stop_loss}</strong></div>
+      <div class="metric-box"><span>${isKo() ? '위험 참고' : 'Risk marker'}</span><strong>${item.stop_loss}</strong></div>
     </div>
     <p class="muted">
       ${t('data')}: ${escapeHtml(translateSource(item.source))} / ${escapeHtml(item.data_as_of)} /
@@ -2474,6 +3591,7 @@ function closeDetail() {
 }
 
 document.getElementById('add-form').addEventListener('submit', addTickers);
+document.getElementById('starter-research-button').addEventListener('click', seedStarterResearchList);
 document.getElementById('scan-button').addEventListener('click', runScan);
 document.getElementById('select-button').addEventListener('click', runSelection);
 document.getElementById('refresh-button').addEventListener('click', bootstrap);
@@ -2498,17 +3616,17 @@ const DETAIL_I18N = {
     dashboard: 'Dashboard',
     five_year_chart: 'Five-year price and volume',
     current_status: 'Current status',
-    ai_summary: 'AI summary',
+    ai_summary: 'Explanation summary',
     industry_profile: 'Industry and profile',
     selection_reason: 'Selection reason',
     expert_consensus: 'Expert consensus',
     required_review: 'Required review set',
     score: 'Score',
     review_state: 'Review state',
-    allocation_guide: 'Allocation guide',
-    risk_reference: 'Risk reference',
-    return_12w: '12w return',
-    return_12m: '12m return',
+    allocation_guide: 'Research size reference',
+    risk_reference: 'Risk marker',
+    return_12w: '12w price change',
+    return_12m: '12m price change',
     drawdown_52w: '52w drawdown',
     trend_score: 'Trend score',
     surge_score: 'Surge score',
@@ -2527,7 +3645,7 @@ const DETAIL_I18N = {
     no_chart: 'No chart data available.',
     close_range: 'Close {min} - {max}',
     why_selected: 'Why selected',
-    signals: 'Signals',
+    positive_factors: 'Positive factors',
     risks: 'Risks',
     to: 'to'
   },
@@ -2536,17 +3654,17 @@ const DETAIL_I18N = {
     dashboard: '대시보드',
     five_year_chart: '최근 5년 가격과 거래량',
     current_status: '현재 상태',
-    ai_summary: 'AI 요약',
+    ai_summary: '설명 요약',
     industry_profile: '업종 및 종목 정보',
     selection_reason: '종목 선정 이유',
     expert_consensus: '전문가 합의 분석',
     required_review: '필수 검토 항목',
     score: '점수',
     review_state: '검토 상태',
-    allocation_guide: '배분 가이드',
+    allocation_guide: '검토 규모 참고',
     risk_reference: '위험 기준',
-    return_12w: '12주 수익률',
-    return_12m: '12개월 수익률',
+    return_12w: '12주 가격 변화',
+    return_12m: '12개월 가격 변화',
     drawdown_52w: '52주 낙폭',
     trend_score: '추세 점수',
     surge_score: '급등 점수',
@@ -2621,10 +3739,14 @@ const DETAIL_KO_DYNAMIC = {
   },
   publicLabels: {
     'High-priority review candidate': '우선 검토 후보',
+    'High-priority research candidate': '우선 연구 후보',
     'Review candidate': '검토 후보',
+    'Research candidate': '연구 후보',
     'Monitor only': '관찰 대상',
+    'Monitoring candidate': '모니터링 후보',
     'Needs review': '검토 필요',
     'High-scoring watchlist candidate': '고득점 관심 후보',
+    'High-scoring research candidate': '고득점 연구 후보',
     'Watchlist candidate': '관심 후보',
     'No current setup': '현재 조건 미충족'
   },
@@ -2645,8 +3767,12 @@ const DETAIL_KO_DYNAMIC = {
     finnhub: '핀허브',
     alpaca: '알파카',
     'alpaca-intraday': '알파카 장중',
-    template: '템플릿',
-    openai: 'OpenAI',
+    template: '템플릿 설명',
+    'template summary': '템플릿 설명',
+    'template summary fallback': '템플릿 설명 대체',
+    'OpenAI explanation summary': 'OpenAI 설명 요약',
+    'deterministic-vcb-alt-v1': '결정론 점수 템플릿 v1',
+    openai: 'OpenAI 설명',
     local: '로컬'
   },
   dataQuality: {
@@ -2663,7 +3789,7 @@ const DETAIL_KO_DYNAMIC = {
   },
   consensusTitles: {
     'Score and trend state': '점수와 추세 상태',
-    'Risk reference': '위험 기준',
+    'Risk marker': '위험 참고',
     'Selection reason': '선정 이유'
   }
 };
@@ -2746,7 +3872,7 @@ function detailText(value, item = {}) {
     'Score passed the numeric threshold, but final selection is blocked until enrichment data is present.':
       '점수 기준은 통과했지만 보강 데이터가 없어서 최종 선정은 보류됩니다.',
     'Score is below the MVP portfolio-manager threshold of 55; wait.': '점수가 MVP 포트폴리오 관리 기준인 55점보다 낮아 대기합니다.',
-    'Decision support only; not investment advice.': '의사결정 보조 정보일 뿐 투자 자문이 아닙니다.',
+    'Decision support only; not a trading instruction.': '의사결정 보조 정보일 뿐 매매 지시가 아닙니다.',
     'No automatic trading is performed.': '자동 매매는 실행하지 않습니다.',
     'Result uses sample/offline data, not live market data.': '이 결과는 실시간 시장 데이터가 아니라 샘플/오프라인 데이터를 사용합니다.',
     'High-volatility archetype: avoid stacking multiple simultaneous positions.':
@@ -2847,15 +3973,25 @@ function renderProfile(profile, history) {
   `;
 }
 
+function detailSummaryProvider(summary) {
+  const provider = summary.provider_label
+    || (summary.provider === 'openai' ? 'OpenAI explanation summary'
+      : summary.provider === 'template-fallback' ? 'template summary fallback'
+        : 'template summary');
+  const model = summary.model || (summary.provider === 'openai' ? 'OpenAI' : 'deterministic-vcb-alt-v1');
+  return `${detailSource(provider)} / ${detailSource(model)}`;
+}
+
 function renderAiSummary(summary) {
   const data = detailState.data || {};
   const evaluation = data.evaluation || {};
   const profile = data.profile || {};
-  document.getElementById('ai-provider').textContent =
-    `${detailSource(summary.provider || 'template')} / ${detailSource(summary.model || 'local')}`;
+  document.getElementById('ai-provider').textContent = detailSummaryProvider(summary);
   const why = Array.isArray(summary.why_selected) ? summary.why_selected : [];
-  const positives = Array.isArray(summary.positive_signals) ? summary.positive_signals : [];
+  const positives = Array.isArray(summary.positive_factors) ? summary.positive_factors : [];
   const risks = Array.isArray(summary.risk_flags) ? summary.risk_flags : [];
+  const method = summary.selection_method
+    || 'Deterministic scoring and portfolio constraints select research candidates; the summary layer only explains the scoring result.';
   const headline = isDetailKo()
     ? `${data.ticker || ''}는 ${detailPublicLabel(evaluation)} 상태입니다.`
     : (summary.headline || '');
@@ -2864,11 +4000,12 @@ function renderAiSummary(summary) {
       + `업종은 ${profile.sector || '-'} / ${profile.industry || '-'}입니다.`
     : (summary.summary || '');
   document.getElementById('ai-summary-body').innerHTML = `
+    <p class="muted">${escapeHtml(detailText(method, evaluation))}</p>
     <p><strong>${escapeHtml(headline)}</strong></p>
     <p>${escapeHtml(body)}</p>
     <h3>${t('why_selected')}</h3>
     <ul>${why.map((item) => `<li>${escapeHtml(detailText(item, evaluation))}</li>`).join('')}</ul>
-    <h3>${t('signals')}</h3>
+    <h3>${t('positive_factors')}</h3>
     <ul>${positives.map((item) => `<li>${escapeHtml(detailText(item, evaluation))}</li>`).join('')}</ul>
     <h3>${t('risks')}</h3>
     <ul>${risks.map((item) => `<li>${escapeHtml(detailText(item, evaluation))}</li>`).join('')}</ul>

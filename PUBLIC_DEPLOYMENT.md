@@ -1,10 +1,10 @@
-# Public Web Deployment Guide
+# Operator-Trial Web Deployment Guide
 
 ## What Is Now Possible
 
-This repository can now run as a token-protected web service that fetches end-of-day market price/volume data from the `yahoo` provider and caches responses locally.
+This repository can run as a token-protected owner/operator trial web service. The current deployment is for controlled verification, not unrestricted public operation.
 
-This is suitable for a controlled public demo or private beta. It is not yet a fully multi-user SaaS with accounts, tenant isolation, billing, or legal-reviewed investment disclosures.
+Current status: `public_launch_ready=false`, `/api/saas-readiness` returns `NOT_READY_FOR_1000_USER_SAAS`, and production market-universe scans remain blocked until Alpaca diagnostics return `ready=true`.
 
 ## Required Environment
 
@@ -43,7 +43,7 @@ Open it with the operator-provided access token:
 https://stockscreeningver10.vercel.app/?token=<operator-token>
 ```
 
-## Local Public-Mode Test
+## Local Token-Mode Test
 
 ```powershell
 $env:VCB_ALT_DATA_PROVIDER="yahoo"
@@ -75,9 +75,9 @@ docker run --rm -p 8765:8765 `
 
 The included `render.yaml` defines a Docker web service. Set `VCB_ALT_WEB_ACCESS_TOKEN` as a secret in Render before opening the service.
 
-## Vercel Serverless Demo
+## Vercel Operator-Trial Deployment
 
-The included `api/index.py` and `vercel.json` can deploy this app as a Vercel Python serverless demo. Because Vercel serverless storage is ephemeral, use it only for controlled demonstrations unless you connect a persistent database in a future release.
+The included `api/index.py` and `vercel.json` can deploy this app as a Vercel Python serverless operator-trial build. Keep it token-gated and do not open unrestricted signup until the release blockers are cleared.
 
 ```powershell
 $token = "replace-with-a-long-random-token"
@@ -95,14 +95,15 @@ npx vercel deploy --prod --yes `
 
 - SQLite storage inside a stateless container can be ephemeral unless the platform provides persistent disks.
 - Vercel serverless `/tmp` storage is ephemeral and can reset between cold starts.
-- The current Vercel deployment is suitable for token-protected private beta verification, not durable multi-user SaaS.
+- The current Vercel deployment is suitable for token-protected owner/operator verification, not unrestricted multi-user SaaS.
+- Alpaca diagnostics must return `ready=true` before representing market-universe scans as live provider-backed results.
 - The current token gate is not a substitute for per-user authentication, audit trails, MFA, or RBAC.
 - Automatic market providers supply price/volume history only in this implementation. Fundamentals, news, short interest, options data, and catalysts remain unavailable unless supplied through a future provider or manual data.
-- This app is decision support only. It does not provide investment advice and does not place trades.
+- This app is decision support only. It does not provide trading instructions and does not place trades.
 
-## 1000-User Path
+## Future 1000-User Path
 
-For 1000 real users, keep the scoring/domain logic but move production state to the architecture in:
+For a future 1000-user public SaaS release, keep the scoring/domain logic but complete the architecture, legal, monitoring, backup/restore, auth, and live-provider gates in:
 
 - `SAAS_1000_USER_ARCHITECTURE.md`
 - `MULTI_TENANT_DATA_MODEL.md`

@@ -38,7 +38,7 @@ Exit criteria:
 
 ## Phase 2: API Prototype
 
-Goal: authenticated single-tenant API with no public launch.
+Goal: authenticated single-tenant API with no unrestricted external release.
 
 Tasks:
 

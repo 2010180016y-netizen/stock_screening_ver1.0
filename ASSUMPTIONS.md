@@ -5,7 +5,7 @@
 - Real Alpaca, Finnhub, SEC, and OpenAI production credentials were not present in the workspace, so implementation uses disabled-by-default provider switches and local cache fixtures for verification.
 - Alpaca is treated as the near-real-time quote/snapshot layer, while Yahoo/Stooq remain daily chart and technical-history providers.
 - SEC submissions metadata is used for filing context; deep filing text analysis remains a later licensed/queued ingestion task.
-- The default AI explanation layer is deterministic template output so public users still get an explanation without triggering external AI cost.
+- The default explanation summary layer is deterministic template output, so users still get scoring context without triggering external model cost. This layer does not select stocks.
 
 Last updated: 2026-05-16
 
@@ -14,7 +14,7 @@ Last updated: 2026-05-16
 1. The repository now contains a runnable local CLI private-beta product plus 1000-user SaaS design documents.
 2. The CLI is still not a shared service and must not be exposed directly to 1000 users.
 3. The 1000-user design assumes a new web/API platform using authenticated multi-tenant storage, workers, cache, and observability while reusing only domain-safe scoring and validation logic from the CLI.
-4. Any public distribution of scoring language such as `BUY_CANDIDATE`, suggested size, or stop loss requires legal review and likely product-copy changes before launch.
+4. Any public distribution of scoring language that reads like a trade instruction, size direction, or exit instruction requires legal review and likely product-copy changes before launch.
 
 ## Historical 0.1.0 Starting Assumptions
 

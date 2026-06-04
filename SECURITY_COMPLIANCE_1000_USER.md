@@ -4,11 +4,11 @@ Last updated: 2026-05-16
 
 ## 1. Hard Release Blockers
 
-- No public launch without authentication.
-- No public launch without tenant isolation tests.
-- No public launch without legal review of investment-advice language.
-- No public launch with automatic trading.
-- No public launch with live provider keys in source or local `.env` on a shared server.
+- No unrestricted external release without authentication.
+- No unrestricted external release without tenant isolation tests.
+- No unrestricted external release without legal review of investment-advice language.
+- No unrestricted external release with automatic trading.
+- No unrestricted external release with live provider keys in source or local `.env` on a shared server.
 
 ## 2. Authentication
 
@@ -47,12 +47,12 @@ Avoid collecting:
 Required product language:
 
 - Decision support only.
-- Not investment advice.
-- No guaranteed return.
+- No trading instructions.
+- No promised outcome.
 - User is responsible for final trade decision.
 - No broker order placement.
 
-Before public beta:
+Before any unrestricted external release:
 
 - Terms of service.
 - Privacy policy.
@@ -98,4 +98,3 @@ Minimum tests:
 - Rate limit returns `429`.
 - Logs redact secrets.
 - CSRF test for state-changing browser requests.
-

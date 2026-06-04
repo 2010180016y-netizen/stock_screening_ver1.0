@@ -21,15 +21,19 @@
 - No known crash in core CLI flow.
 - Tests and bytecode build pass.
 - Remaining P1 items are documented and not safety-critical.
-- The product is clearly labeled as local decision-support, not investment advice.
+- The product is clearly labeled as local decision-support, not a trading-instruction service.
 
-## Public Beta Criteria
+## Future External-Release Criteria
 
-- Optional real-data integrations are implemented behind explicit opt-in.
-- External provider rate limits, retries, and failures are tested.
+Current status is owner/operator trial only. Public, paid, or unrestricted external release is blocked until all of the following are true:
+
+- Optional real-data integrations are implemented behind explicit opt-in and live diagnostics pass.
+- External provider rate limits, retries, failures, budgets, and fail-closed behavior are tested in the deployed environment.
 - Security review is complete for any unrestricted network-accessible surface.
-- Data deletion/export is verified on representative data.
+- Data deletion/export is verified on representative tenant data.
+- Hosted scan-heavy load testing proves the worker-owned market-snapshot path under expected user load.
 - UX has been tested with a non-developer operator.
+- Legal review is complete and written approval exists for the intended release posture.
 
 ## Not Ready Conditions
 
@@ -38,4 +42,4 @@
 - Secret values are logged.
 - The app performs unexpected external API calls.
 - The app exposes a public web/API surface without at least token-gated access.
-- The app suggests guaranteed returns or automatic trading.
+- The app suggests promised outcomes or automatic trading.

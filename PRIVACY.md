@@ -1,8 +1,8 @@
 # Privacy Notice
 
-Status: starter public-beta draft, not legal-reviewed.
+Status: owner/operator-trial draft only. Not legal-reviewed. Do not use as a public, paid, or unrestricted launch document until qualified counsel approves it.
 
-VCB-Alt currently stores the minimum data needed for a token-protected screening workflow.
+VCB-Alt currently stores the minimum data needed for an owner/operator-trial screening workflow.
 
 ## Data Stored In The Current Beta
 
@@ -20,8 +20,8 @@ Access tokens and provider credentials must be configured as environment variabl
 
 ## Future Public SaaS Requirements
 
-Before open signup, VCB-Alt needs per-user accounts, tenant isolation, export/delete workflows, retention policy, audit-safe anonymization, and legal review.
+Before open signup, VCB-Alt needs per-user accounts, tenant isolation, export/delete workflows, retention policy, audit-safe anonymization, and qualified legal review.
 
 ## Launch Requirement
 
-This notice must be reviewed by qualified counsel before broad public launch.
+This notice must be reviewed and approved by qualified counsel before public, paid, or trading-instruction-adjacent launch.

@@ -8,9 +8,16 @@ from pathlib import Path
 from typing import Any
 
 from .config import AppConfig
+from .provider_resilience import ProviderFailure, provider_request_json
 
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
-AI_SUMMARY_CACHE_VERSION = "v1"
+AI_SUMMARY_CACHE_VERSION = "v2"
+SUMMARY_ROLE = "explanation_only"
+SELECTION_SOURCE = "deterministic_scoring"
+SELECTION_METHOD = (
+    "Deterministic scoring and portfolio constraints select research candidates; "
+    "the summary layer only explains the scoring result."
+)
 
 
 def build_ai_summary(config: AppConfig, analysis: dict[str, Any]) -> dict[str, Any]:
@@ -19,7 +26,8 @@ def build_ai_summary(config: AppConfig, analysis: dict[str, Any]) -> dict[str, A
         return template
     if not config.openai_api_key:
         template["provider"] = "template-fallback"
-        template["limitations"].append("OpenAI summary provider is configured, but no API key is available.")
+        template["provider_label"] = "template summary fallback"
+        template["limitations"].append("OpenAI explanation-summary provider is configured, but no API key is available.")
         return template
     cached = _read_cached_summary(config, analysis)
     if cached:
@@ -27,7 +35,8 @@ def build_ai_summary(config: AppConfig, analysis: dict[str, Any]) -> dict[str, A
     generated = _openai_summary(config, analysis)
     if not generated:
         template["provider"] = "template-fallback"
-        template["limitations"].append("OpenAI summary generation failed; deterministic local summary is shown.")
+        template["provider_label"] = "template summary fallback"
+        template["limitations"].append("OpenAI explanation-summary generation failed; deterministic local template summary is shown.")
         return template
     _write_cached_summary(config, analysis, generated)
     return generated
@@ -45,16 +54,21 @@ def build_template_summary(analysis: dict[str, Any]) -> dict[str, Any]:
     risks = _risk_points(evaluation, metrics)
     return {
         "provider": "template",
+        "provider_label": "template summary",
         "model": "deterministic-vcb-alt-v1",
+        "role": SUMMARY_ROLE,
+        "selection_source": SELECTION_SOURCE,
+        "selection_method": SELECTION_METHOD,
         "language": "en",
         "headline": f"{analysis.get('ticker', '')} is a {evaluation.get('public_label', 'review')} setup.",
         "summary": (
             f"{analysis.get('ticker', '')} is classified as {evaluation.get('primary_archetype_label', 'unknown')} "
             f"with score {evaluation.get('combined_score', '-')}. The current industry context is "
-            f"{profile.get('sector', 'Unknown')} / {profile.get('industry', 'Unknown')}."
+            f"{profile.get('sector', 'Unknown')} / {profile.get('industry', 'Unknown')}. "
+            "This text explains deterministic scoring output; it is not the selection engine."
         ),
         "why_selected": rationale or ["No selection rationale is available for this ticker."],
-        "positive_signals": positives,
+        "positive_factors": positives,
         "risk_flags": risks,
         "data_quality": {
             "coverage_score": evaluation.get("data_coverage_score", 0),
@@ -65,7 +79,8 @@ def build_template_summary(analysis: dict[str, Any]) -> dict[str, Any]:
             "note": data_note,
         },
         "limitations": [
-            "This is decision support only, not investment advice.",
+            "The summary provider explains deterministic scoring output and does not select stocks.",
+            "Decision support only; not a trading instruction or personalized portfolio action.",
             "A human operator must verify filings, news, options, and analyst data before publication.",
         ],
     }
@@ -81,7 +96,7 @@ def _positive_points(evaluation: dict[str, Any], metrics: dict[str, Any]) -> lis
         points.append(f"Analyst/revision score is positive at {metrics.get('analyst_revision_score')}.")
     if float(metrics.get("call_open_interest") or 0) > float(metrics.get("put_open_interest") or 0) > 0:
         points.append("Options positioning shows more call open interest than put open interest.")
-    return points or ["No strong positive non-price signal is available yet."]
+    return points or ["No strong positive non-price factor is available yet."]
 
 
 def _risk_points(evaluation: dict[str, Any], metrics: dict[str, Any]) -> list[str]:
@@ -107,7 +122,9 @@ def _openai_summary(config: AppConfig, analysis: dict[str, Any]) -> dict[str, An
         "text": {"format": {"type": "json_object"}},
         "input": (
             "Return strict JSON for a stock-screening explanation with keys: headline, summary, "
-            "why_selected, positive_signals, risk_flags, limitations. Do not give investment advice. "
+            "why_selected, positive_factors, risk_flags, limitations. Do not give trading instructions "
+            "or personalized portfolio guidance. "
+            "The explanation layer does not select stocks; it only explains deterministic scoring results. "
             f"Use only this data: {json.dumps(_compact_analysis(analysis), ensure_ascii=False)}"
         ),
     }
@@ -122,18 +139,34 @@ def _openai_summary(config: AppConfig, analysis: dict[str, Any]) -> dict[str, An
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=config.market_data_timeout_seconds) as response:
-            response_payload = json.loads(response.read().decode("utf-8"))
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+        response_payload = provider_request_json(config, "openai", request)
+    except (ProviderFailure, urllib.error.URLError, TimeoutError, json.JSONDecodeError):
         return {}
     text = _response_text(response_payload)
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError:
         return {}
+    template = build_template_summary(analysis)
     parsed["provider"] = "openai"
+    parsed["provider_label"] = "OpenAI explanation summary"
     parsed["model"] = config.openai_model
-    parsed["data_quality"] = build_template_summary(analysis)["data_quality"]
+    parsed["role"] = SUMMARY_ROLE
+    parsed["selection_source"] = SELECTION_SOURCE
+    parsed["selection_method"] = SELECTION_METHOD
+    parsed["data_quality"] = template["data_quality"]
+    for key in ("why_selected", "positive_factors", "risk_flags"):
+        if not isinstance(parsed.get(key), list):
+            parsed[key] = template[key]
+    limitations = parsed.get("limitations", [])
+    if isinstance(limitations, str):
+        limitations = [limitations]
+    elif not isinstance(limitations, list):
+        limitations = []
+    parsed["limitations"] = [
+        "The summary provider explains deterministic scoring output and does not select stocks.",
+        *limitations,
+    ]
     return parsed
 
 

@@ -24,6 +24,16 @@ class AppConfig:
     auto_seed_sample: bool = True
     market_data_timeout_seconds: float = 10.0
     market_data_cache_ttl_hours: float = 12.0
+    provider_retry_attempts: int = 2
+    provider_retry_backoff_seconds: float = 0.05
+    provider_circuit_failure_threshold: int = 3
+    provider_circuit_reset_seconds: int = 300
+    provider_alpaca_daily_budget: int = 2500
+    provider_finnhub_daily_budget: int = 500
+    provider_yahoo_daily_budget: int = 2500
+    provider_sec_daily_budget: int = 500
+    provider_openai_daily_budget: int = 200
+    provider_template_daily_budget: int = 1000000
     stooq_api_key: str = ""
     intraday_data_provider: str = "none"
     alpaca_api_key: str = ""
@@ -117,6 +127,43 @@ def load_config(root_dir: Path | None = None) -> AppConfig:
         raise ValidationError("Public web mode requires VCB_ALT_WEB_ACCESS_TOKEN with at least 16 characters.")
     market_data_timeout_seconds = _parse_positive_float(get("MARKET_DATA_TIMEOUT_SECONDS", "10"), "MARKET_DATA_TIMEOUT_SECONDS")
     market_data_cache_ttl_hours = _parse_positive_float(get("MARKET_DATA_CACHE_TTL_HOURS", "12"), "MARKET_DATA_CACHE_TTL_HOURS")
+    provider_retry_attempts = _parse_positive_int(get("PROVIDER_RETRY_ATTEMPTS", "2"), "PROVIDER_RETRY_ATTEMPTS")
+    provider_retry_backoff_seconds = _parse_non_negative_float(
+        get("PROVIDER_RETRY_BACKOFF_SECONDS", "0.05"),
+        "PROVIDER_RETRY_BACKOFF_SECONDS",
+    )
+    provider_circuit_failure_threshold = _parse_positive_int(
+        get("PROVIDER_CIRCUIT_FAILURE_THRESHOLD", "3"),
+        "PROVIDER_CIRCUIT_FAILURE_THRESHOLD",
+    )
+    provider_circuit_reset_seconds = _parse_positive_int(
+        get("PROVIDER_CIRCUIT_RESET_SECONDS", "300"),
+        "PROVIDER_CIRCUIT_RESET_SECONDS",
+    )
+    provider_alpaca_daily_budget = _parse_positive_int(
+        get("PROVIDER_ALPACA_DAILY_BUDGET", "2500"),
+        "PROVIDER_ALPACA_DAILY_BUDGET",
+    )
+    provider_finnhub_daily_budget = _parse_positive_int(
+        get("PROVIDER_FINNHUB_DAILY_BUDGET", "500"),
+        "PROVIDER_FINNHUB_DAILY_BUDGET",
+    )
+    provider_yahoo_daily_budget = _parse_positive_int(
+        get("PROVIDER_YAHOO_DAILY_BUDGET", "2500"),
+        "PROVIDER_YAHOO_DAILY_BUDGET",
+    )
+    provider_sec_daily_budget = _parse_positive_int(
+        get("PROVIDER_SEC_DAILY_BUDGET", "500"),
+        "PROVIDER_SEC_DAILY_BUDGET",
+    )
+    provider_openai_daily_budget = _parse_positive_int(
+        get("PROVIDER_OPENAI_DAILY_BUDGET", "200"),
+        "PROVIDER_OPENAI_DAILY_BUDGET",
+    )
+    provider_template_daily_budget = _parse_positive_int(
+        get("PROVIDER_TEMPLATE_DAILY_BUDGET", "1000000"),
+        "PROVIDER_TEMPLATE_DAILY_BUDGET",
+    )
     stooq_api_key = get("STOOQ_API_KEY", "")
     intraday_data_provider = get("INTRADAY_DATA_PROVIDER", "none").lower()
     if intraday_data_provider not in {"none", "alpaca"}:
@@ -219,6 +266,16 @@ def load_config(root_dir: Path | None = None) -> AppConfig:
         auto_seed_sample=_truthy(get("AUTO_SEED_SAMPLE", "true")),
         market_data_timeout_seconds=market_data_timeout_seconds,
         market_data_cache_ttl_hours=market_data_cache_ttl_hours,
+        provider_retry_attempts=provider_retry_attempts,
+        provider_retry_backoff_seconds=provider_retry_backoff_seconds,
+        provider_circuit_failure_threshold=provider_circuit_failure_threshold,
+        provider_circuit_reset_seconds=provider_circuit_reset_seconds,
+        provider_alpaca_daily_budget=provider_alpaca_daily_budget,
+        provider_finnhub_daily_budget=provider_finnhub_daily_budget,
+        provider_yahoo_daily_budget=provider_yahoo_daily_budget,
+        provider_sec_daily_budget=provider_sec_daily_budget,
+        provider_openai_daily_budget=provider_openai_daily_budget,
+        provider_template_daily_budget=provider_template_daily_budget,
         stooq_api_key=stooq_api_key,
         intraday_data_provider=intraday_data_provider,
         alpaca_api_key=alpaca_api_key,
@@ -282,6 +339,18 @@ def doctor_report(config: AppConfig) -> dict[str, Any]:
         "worker_cron_enabled": config.worker_cron_enabled,
         "production_saas_mode": config.production_saas_mode,
         "market_data_cache_ttl_hours": config.market_data_cache_ttl_hours,
+        "provider_retry_attempts": config.provider_retry_attempts,
+        "provider_retry_backoff_seconds": config.provider_retry_backoff_seconds,
+        "provider_circuit_failure_threshold": config.provider_circuit_failure_threshold,
+        "provider_circuit_reset_seconds": config.provider_circuit_reset_seconds,
+        "provider_daily_budgets": {
+            "alpaca": config.provider_alpaca_daily_budget,
+            "finnhub": config.provider_finnhub_daily_budget,
+            "yahoo": config.provider_yahoo_daily_budget,
+            "sec": config.provider_sec_daily_budget,
+            "openai": config.provider_openai_daily_budget,
+            "template": config.provider_template_daily_budget,
+        },
         "intraday_data_provider": config.intraday_data_provider,
         "intraday_cache_ttl_seconds": config.intraday_cache_ttl_seconds,
         "research_data_provider": config.research_data_provider,
@@ -306,6 +375,16 @@ def _parse_positive_float(raw: str, name: str) -> float:
         raise ValidationError(f"{name} must be a number.") from exc
     if value <= 0:
         raise ValidationError(f"{name} must be greater than 0.")
+    return value
+
+
+def _parse_non_negative_float(raw: str, name: str) -> float:
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValidationError(f"{name} must be a number.") from exc
+    if value < 0:
+        raise ValidationError(f"{name} must be 0 or greater.")
     return value
 
 

@@ -91,7 +91,7 @@ async function handleApi(request, env, ctx, url) {
     return json(ok("Configuration loaded.", { data_provider: "yahoo", external_api_enabled: true, public_web_enabled: true, market_data_cache_ttl_hours: 12, runtime: "cloudflare-worker-d1" }));
   }
   if (request.method === "GET" && url.pathname === "/api/saas-readiness") {
-    return json(ok("SaaS readiness checked.", { decision: "READY_FOR_PRIVATE_BETA", p0_blocker_count: 0, warning: "Token-protected beta. Not legal-reviewed investment advice." }));
+    return json(ok("SaaS readiness checked.", { decision: "READY_FOR_PRIVATE_BETA", p0_blocker_count: 0, warning: "Token-protected beta. Legal documents are not reviewed for public launch." }));
   }
   if (url.pathname === "/api/watchlist") return await handleWatchlist(request, env.DB, url);
   if (request.method === "GET" && url.pathname === "/api/scan") {
@@ -186,7 +186,7 @@ async function evaluateTicker(db, ticker, ctx) {
     combined_score: score,
     setup_strength: score >= 75 ? "strong" : score >= 67 ? "watch" : "weak",
     can_enter: canEnter,
-    decision_label: canEnter ? "BUY_CANDIDATE" : score >= 60 ? "WATCH" : "PASS",
+    decision_label: canEnter ? "RESEARCH_CANDIDATE" : score >= 60 ? "MONITOR" : "PASS",
     suggested_size_pct: canEnter ? (score >= 75 ? 12 : 8) : 0,
     stop_loss: round(close * 0.92, 2),
     source: "yahoo",

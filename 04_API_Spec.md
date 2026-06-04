@@ -11,7 +11,7 @@ def detect_archetype_A_ai_tech(
     revenue_surprise_pct: float,
     revenue_4q_acceleration_pp: float,
     tech_sector_rs_12w_pp: float,
-    insider_voluntary_buy_count_90d: int,
+    insider_voluntary_purchase_count_90d: int,
     chart_base_weeks: float,
     chart_breakout_volume_ratio: float,
     forward_guidance_raised: bool,
@@ -38,14 +38,14 @@ def detect_archetype_B_crypto_pivot(
 class ArchetypeScore:
     archetype: ArchetypeID
     total_score: int                  # 0-100
-    signal_breakdown: Dict[str, int]
+    factor_breakdown: Dict[str, int]
     strength: SetupStrength            # NO_SETUP / SETUP / STRONG_SETUP
     expected_holding_days: Tuple[int, int]
     expected_return_pct: Tuple[int, int]
     suggested_size_pct: float
     stop_loss_pct: float
     rationale: List[str]
-    fired_signals: List[str]
+    triggered_factors: List[str]
 ```
 
 ### 1.2 Phase 2: Portfolio Manager
@@ -138,7 +138,7 @@ def fetch_sector_rs(
     """Sector RS vs benchmark (12W return diff)."""
 
 def fetch_insider_transactions(ticker: str, days: int = 90) -> List[Dict]:
-    """SEC Form 4 — insider buy/sell."""
+    """SEC Form 4 — insider purchase/sale activity."""
 
 def fetch_options_chain(ticker: str) -> OptionsFlowData:
     """Yfinance options chain."""
@@ -349,7 +349,7 @@ $ python -m vcb_alt evaluate AAPL
 > Combined: 38
 > Setup: NO_SETUP
 > Can enter: False
-> Reason: 매출 가속 부족 (+2pp), insider buy 0건
+> Reason: 매출 가속 부족 (+2pp), insider purchase activity 0건
 ```
 
 ### 4.2 Weekly Commands

@@ -2,17 +2,27 @@
 
 Decision date: 2026-05-18 KST
 
-Latest update: 2026-05-21 KST
+Latest update: 2026-06-04 KST
 
-Latest deployment update: 2026-05-24 KST
+Latest deployment update: 2026-06-04 KST
 
 ## 1. Final State
 
-READY_FOR_PUBLIC_BETA.
+NOT_READY_FOR_PUBLIC_1000_USER_SAAS.
 
-The product now runs as a local CLI, local token-protected web dashboard, and deployed Vercel private-beta site at `https://stockscreeningver10.vercel.app`. It can initialize SQLite, manage a watchlist, fetch automatic end-of-day market data, compute market-derived precision metrics, scan, select candidates, show operations/failures, and run in a browser.
+2026-06-04 hosted 1000-user load-test recheck: `tools/host_queue_load_test.py` now records worker-protection preflight, auth register/login/delete preflight, provider-failure coverage status, provider budget guard state, and cleanup behavior. A real Vercel production preflight wrote `data/hosted_scan_heavy_1000_20260604.json`: health/provider/release/auth/worker-protection requests executed with `6` successful `2xx` responses and `1` expected worker-protection `401`; p50 latency was `398.76ms`, p95 `649.85ms`, and p99 `649.85ms`. The protected worker endpoint correctly rejected unauthenticated trigger attempts, and auth register/login/delete cleanup succeeded. However, Vercel env pull exposed worker-related keys only as zero-length values to this local runner, so the provider budget guard blocked the worker-trigger phase before creating 1000 load users or consuming provider-heavy scan budget. Registration/enqueue load, worker completion, job polling, snapshot reads, provider call deltas, queue depth, and hosted provider-alert/dead-letter handling were therefore not proven. This is not a passing hosted 1000-user completion test, and the release remains `NOT_READY_FOR_1000_USER_SAAS`.
 
-2026-05-19 update: the public-beta safety layer now adds SaaS-safe review labels, scoring-version visibility, provider-status reporting, and starter Terms/Privacy/Risk documents. These reduce launch ambiguity but do not remove the need for real auth, durable storage, legal review, or load testing.
+2026-06-03 Alpaca diagnostics update: the code now includes a secret-safe `/api/provider-diagnostics/alpaca` endpoint that checks Paper Trading, Live Trading, and Market Data snapshot authentication without returning key or secret values. Local tests, lint, typecheck, and compile pass. Production deployment completed, but diagnostics returned `classification=key_context_mismatch_or_invalid`, `ready=false`, and HTTP 401 for Paper Trading, Live Trading, and Market Data snapshot checks. `/api/user/scan` still fails closed with Alpaca HTTP 401 and does not return sample fallback candidates. The production scan flow must not be represented as a working live all-market research-candidate flow until Alpaca diagnostics returns `ready=true` and a production scan returns real `market_universe` candidates.
+
+2026-06-03 worker-owned snapshot update: production SaaS market-universe scans now use durable `market_scan_snapshots`. User scan requests read a fresh worker-written snapshot or return `202` queued/pending status instead of directly executing provider-heavy scans. The worker writes the scan report, selected candidates, provider metadata, freshness, and failures, with retry, stale-running recovery, and dead-letter handling. This improves concurrency posture but does not remove the Alpaca credential blocker.
+
+2026-06-03 hosted 1000-user load-test update: `tools/host_queue_load_test.py` now supports the required hosted scan-heavy path: registration/login, scan enqueue, protected worker trigger, job polling, snapshot reads, provider-health budget guard, provider failure visibility, queue depth, DB error count, provider call deltas, worker completion counts, and test-account cleanup. The actual 1000-user production command was run with provider budget guards and wrote `data/hosted_scan_heavy_1000_20260603.json`, but it stopped after safe preflight because this workstation does not have `VCB_ALT_WORKER_TOKEN`. Preflight API calls succeeded with `3/3` HTTP `200`, p50 `395.09ms`, p95 `421.47ms`, p99 `421.47ms`, and `0` provider/DB failures; however, registration/enqueue, worker trigger, job polling, and snapshot reads were not executed in the guarded run. This is not a passing hosted 1000-user completion test.
+
+2026-06-03 Neon/monitoring/legal update: Neon PostgreSQL appears wired for the operator-trial control plane, and `tools/ops_health_report.py` now reports nested release configuration correctly. `NEON_BACKUP_RESTORE_DRILL.md` now defines a staging restore procedure, migration drift check, sample tenant integrity check, RTO/RPO measurement, and rollback path. `MONITORING_ALERTING_PLAN.md` now contains incident runbooks for provider outage, worker failure, queue backlog, DB errors, auth abuse, and rate-limit saturation. `LEGAL_REVIEW_PACKET.md`, `TERMS.md`, `PRIVACY.md`, and `RISK_DISCLOSURE.md` now explicitly state that public, paid, or investment-advice-adjacent launch is blocked until written counsel approval. The Neon restore drill itself remains pending operator-side execution.
+
+Current operating scope: the product runs as a local CLI, local token-protected web dashboard, and deployed Vercel owner/operator-trial site at `https://stockscreeningver10.vercel.app`. It can initialize databases, manage manual research watchlists, report provider status, and serve the dashboard. The current production live market-universe scan is blocked by Alpaca `HTTP 401`, so it must not be described as a working public research-candidate service.
+
+Historical 2026-05-19 update: the external-review safety layer added SaaS-safe review labels, scoring-version visibility, provider-status reporting, and starter Terms/Privacy/Risk documents. These reduced launch ambiguity at that time but did not remove the need for real auth, durable storage, legal review, or load testing.
 
 Second 2026-05-19 update: per-user auth primitives, tenant-scoped watchlist APIs, a PostgreSQL target migration, basic in-process rate limiting, and a local 1000-user load simulation now exist. This reduces several engineering blockers but does not yet make the deployed demo an unrestricted 1000-user public SaaS because live PostgreSQL, Redis/edge rate limits, OAuth/MFA, and deployed-host load tests are still pending.
 
@@ -40,7 +50,7 @@ Fifth 2026-05-22 update: the code now includes per-user export/delete APIs, tena
 
 2026-05-24 dashboard scan-button update: the deployed dashboard now routes `Run scan` through tenant-scoped `/api/user/scan` in SaaS mode, auto-recovers browser demo sessions, seeds a starter watchlist, and returns final selection in the scan response. Production API smoke scanned `7` tickers in `69ms` and selected `PLTR`, `VST`, `MSTR`; browser verification showed `Scan completed in 21 ms` and rendered candidate results on deployment `dpl_EJwfpEvi9SnziMreYcbGAMeyVKGR`.
 
-It is suitable for a free/public beta of the decision-support SaaS with clear risk disclosure, no payment collection, no automated trading, and operator monitoring enabled. It must not be marketed as investment advice or a paid advisory product until legal review, support operations, and provider licensing are finalized.
+Current conclusion: it is suitable only for owner/operator trial and internal verification. It is not suitable for external beta, public SaaS, or 1000-user public operation until Alpaca diagnostics return `ready=true`, production `/api/user/scan` returns live market-universe candidates without sample fallback, the protected hosted 1000-user worker completion test passes with `load_test_passed=true`, and the remaining auth, monitoring, backup/restore, legal, and support gates are cleared. `/api/release-status` may report `production_saas_ready=true` for configuration posture, but that is not public-launch approval and must not override `public_launch_ready=false`.
 
 ## 2. Resolved P0/P1 Items
 
@@ -58,7 +68,7 @@ It is suitable for a free/public beta of the decision-support SaaS with clear ri
 - P1 resolved: public UI now uses neutral review labels instead of direct trade-action wording.
 - P1 resolved: evaluation results expose `scoring_version` and `public_label`.
 - P1 resolved: provider status/capability endpoint exists without exposing secrets.
-- P1 resolved: optional full-data enrichment structure exists for intraday quote, fundamentals, earnings, news, filings, analyst trends, short interest, options, and AI explanation.
+- P1 resolved: optional full-data enrichment structure exists for intraday quote, fundamentals, earnings, news, filings, analyst trends, short interest, options, and explanation summaries.
 - P1 partially resolved: Terms, Privacy, and Risk Disclosure drafts exist for legal review.
 - P1 partially resolved: per-user auth/session APIs exist and are disabled by default.
 - P1 partially resolved: tenant-scoped watchlist storage and tests exist.
@@ -81,7 +91,7 @@ It is suitable for a free/public beta of the decision-support SaaS with clear ri
 - P1 resolved for final deploy health smoke: final production deploy `dpl_7iWJ3a9cK3WDWCKwuy43SztLb5Vd` returned `200/200` health responses with `0` errors at concurrency `20`.
 - P1 resolved for worker-trigger path: hosted queue completion smoke completed `10/10` jobs with `0` errors after rotating the production worker token.
 - P1 blocker refined: single-runner hosted queue load reached `24/50` completed jobs before the production durable rate limiter correctly blocked the remaining requests.
-- P1 resolved for 1000-user operating gate: hosted worker-triggered production load completed `1000/1000` scan jobs with `0` errors.
+- Historical P1 evidence: hosted worker-triggered production load completed `1000/1000` queued jobs with `0` errors before the later live market-universe/Alpaca credential gate. This is not current public-launch approval.
 - P1 resolved for rate-limit scalability: auth/signup, authenticated tenant API, worker, and default public API traffic now use separate durable buckets.
 - P1 resolved for deployed UI stability: served dashboard/detail JavaScript passes syntax checks after Korean i18n replacement.
 - P1 resolved for deployed dashboard use: the `Run scan` button now uses tenant-scoped scan/select APIs in SaaS mode and renders candidates after one click.
@@ -116,21 +126,21 @@ Allowed now:
 
 - Controlled private beta.
 - Token-protected deployed demo site for a small trusted audience.
-- Free/public beta for up to the tested 1000-user queue workload.
+- Internal/operator verification of the previously tested queue workload only; not public operation.
 - Decision-support screening with no trade execution.
 
 Not allowed yet:
 
 - Open signup without abuse monitoring, support coverage, and email verification.
 - Paid public investment product.
-- Claims of financial advice or guaranteed returns.
+- Claims of personalized financial guidance or promised outcomes.
 
 ## 5. Features That Must Not Be Publicly Exposed
 
 - Automatic trading or broker integration.
 - Multi-user data storage without tenant isolation.
 - Admin/operations endpoints without real auth/RBAC.
-- Any page that markets outputs as investment advice.
+- Any page that markets outputs as trading instructions.
 - Any collection of sensitive personal/payment data.
 
 ## 6. Next 7 Days

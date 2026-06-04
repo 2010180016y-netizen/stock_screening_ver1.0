@@ -1,0 +1,271 @@
+{
+  "base_url": "https://stockscreeningver10.vercel.app",
+  "cleanup": {
+    "attempted": 0,
+    "failed": 0,
+    "ok": 0,
+    "sample": []
+  },
+  "concurrency": 20,
+  "db_error_count": 0,
+  "elapsed_seconds": 1.209,
+  "flows_per_second": 827.17,
+  "health": {
+    "status": "healthy"
+  },
+  "jobs": {},
+  "judgment": {
+    "decision": "NOT_READY_FOR_1000_USER_SAAS",
+    "load_test_passed": false,
+    "operable_for_1000_user_saas": false,
+    "reason": "Hosted 1000-user scan-heavy test did not prove safe operation; inspect provider, queue, worker, and DB metrics."
+  },
+  "metrics": {
+    "http_status_counts": {
+      "200": 3,
+      "2xx": 3
+    },
+    "latency_by_stage_ms": {
+      "health": {
+        "max": 395.09,
+        "p50": 395.09,
+        "p95": 395.09,
+        "p99": 395.09
+      },
+      "provider_health_before": {
+        "max": 421.47,
+        "p50": 421.47,
+        "p95": 421.47,
+        "p99": 421.47
+      },
+      "release_status": {
+        "max": 392.1,
+        "p50": 392.1,
+        "p95": 392.1,
+        "p99": 392.1
+      }
+    },
+    "latency_ms": {
+      "max": 421.47,
+      "p50": 395.09,
+      "p95": 421.47,
+      "p99": 421.47
+    },
+    "request_count": 3,
+    "sample_errors": []
+  },
+  "provider": {
+    "budget_guard": {
+      "blocked": true,
+      "enabled": true,
+      "provider_calls_allowed": false,
+      "reason": "Worker trigger requires a token in --worker-token-env."
+    },
+    "call_count_delta": {
+      "alpaca": null,
+      "finnhub": null,
+      "openai": null,
+      "sec": null,
+      "template": null,
+      "yahoo": null
+    },
+    "failure_count": 0,
+    "failures": [],
+    "health_after": null,
+    "health_before": {
+      "alpaca": {
+        "budget": {
+          "daily_limit": 2500,
+          "remaining": 2500,
+          "used": 0,
+          "window_started_at": "2026-06-02T23:25:54.002647+00:00"
+        },
+        "circuit": {
+          "consecutive_failures": 0,
+          "open": false,
+          "open_until": null
+        },
+        "configured": true,
+        "last_error_code": null,
+        "status": "ready",
+        "total_failures": 0,
+        "total_requests": 0
+      },
+      "finnhub": {
+        "budget": {
+          "daily_limit": 500,
+          "remaining": 500,
+          "used": 0,
+          "window_started_at": "2026-06-02T23:25:54.002650+00:00"
+        },
+        "circuit": {
+          "consecutive_failures": 0,
+          "open": false,
+          "open_until": null
+        },
+        "configured": true,
+        "last_error_code": null,
+        "status": "ready",
+        "total_failures": 0,
+        "total_requests": 0
+      },
+      "openai": {
+        "budget": {
+          "daily_limit": 200,
+          "remaining": 200,
+          "used": 0,
+          "window_started_at": "2026-06-02T23:25:54.002654+00:00"
+        },
+        "circuit": {
+          "consecutive_failures": 0,
+          "open": false,
+          "open_until": null
+        },
+        "configured": false,
+        "last_error_code": null,
+        "status": "not_configured",
+        "total_failures": 0,
+        "total_requests": 0
+      },
+      "sec": {
+        "budget": {
+          "daily_limit": 500,
+          "remaining": 500,
+          "used": 0,
+          "window_started_at": "2026-06-02T23:25:54.002653+00:00"
+        },
+        "circuit": {
+          "consecutive_failures": 0,
+          "open": false,
+          "open_until": null
+        },
+        "configured": false,
+        "last_error_code": null,
+        "status": "not_configured",
+        "total_failures": 0,
+        "total_requests": 0
+      },
+      "template": {
+        "budget": {
+          "daily_limit": 1000000,
+          "remaining": 1000000,
+          "used": 0,
+          "window_started_at": "2026-06-02T23:25:54.002655+00:00"
+        },
+        "circuit": {
+          "consecutive_failures": 0,
+          "open": false,
+          "open_until": null
+        },
+        "configured": true,
+        "last_error_code": null,
+        "status": "ready",
+        "total_failures": 0,
+        "total_requests": 0
+      },
+      "yahoo": {
+        "budget": {
+          "daily_limit": 2500,
+          "remaining": 2500,
+          "used": 0,
+          "window_started_at": "2026-06-02T23:25:54.002652+00:00"
+        },
+        "circuit": {
+          "consecutive_failures": 0,
+          "open": false,
+          "open_until": null
+        },
+        "configured": true,
+        "last_error_code": null,
+        "status": "ready",
+        "total_failures": 0,
+        "total_requests": 0
+      }
+    }
+  },
+  "queue_depth": {
+    "available": true,
+    "market_completed": null,
+    "market_dead_letter": null,
+    "market_failed": null,
+    "market_latest": null,
+    "market_queued": null,
+    "market_running": null,
+    "tenant_completed": null,
+    "tenant_failed": null,
+    "tenant_queued": null,
+    "tenant_running": null
+  },
+  "reason": "worker token preflight blocked",
+  "registration_login_enqueue": {
+    "failed": 0,
+    "ok": 0,
+    "sample_errors": [],
+    "status_counts": {},
+    "unique_jobs": {}
+  },
+  "release_status": {
+    "configured_data": {
+      "ai_summary_provider": "template",
+      "ai_summary_ready": true,
+      "database_backend": "postgresql",
+      "intraday_provider": "alpaca",
+      "intraday_ready": true,
+      "market_prefilter_limit": 30,
+      "market_provider": "yahoo",
+      "market_universe_live_ready": true,
+      "market_universe_provider": "auto",
+      "rate_limit_backend": "database",
+      "research_provider": "finnhub",
+      "research_ready": true,
+      "scan_mode": "market_universe",
+      "scan_queue_enabled": true,
+      "user_auth_enabled": true,
+      "worker_configured": true,
+      "worker_cron_enabled": true
+    },
+    "do_not_publicly_launch_until": [
+      "Per-user authentication is enabled with durable sessions.",
+      "PostgreSQL or another durable production database is live.",
+      "Tenant isolation and production rate limits are deployed.",
+      "Licensed live/research provider credentials are configured and monitored.",
+      "Legal, risk, privacy, and support workflows are approved.",
+      "Hosted load test passes for the target traffic level."
+    ],
+    "operator_can_use": [
+      "Open the token-protected dashboard.",
+      "Run all-market discovery from the configured market universe.",
+      "Use watchlist tickers as an optional manual research list.",
+      "Open ticker detail pages with five-year charts, sector/industry, rationale, and explanation summary.",
+      "Review provider warnings before treating a candidate as research-complete."
+    ],
+    "production_saas_ready": true,
+    "public_launch_ready": false,
+    "public_scope": "Single-operator/token-protected preview, not unrestricted public SaaS.",
+    "release_channel": "operator_trial",
+    "release_label": "Owner pre-user usage build",
+    "scoring_version": "mvp-market-v0.6.0",
+    "user_trial_ready": true,
+    "warnings": [
+      "Alpaca credentials are configured but not live-verified by provider-status; run /api/provider-diagnostics/alpaca before production scans."
+    ]
+  },
+  "run_type": "hosted_scan_heavy_1000_user",
+  "snapshot_reads": {
+    "attempted": 0,
+    "failed": 0,
+    "ok": 0,
+    "sample": []
+  },
+  "success_rate": 0.0,
+  "trigger_worker": true,
+  "users": 1000,
+  "worker": {
+    "completion_count": 0,
+    "failed_count": 0,
+    "processed_count": 0,
+    "runs": [],
+    "terminal_count": 0,
+    "triggered": true
+  }
+}

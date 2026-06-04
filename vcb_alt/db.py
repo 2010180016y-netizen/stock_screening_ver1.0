@@ -12,7 +12,7 @@ from .config import AppConfig
 from .errors import NotFoundError
 from .logging_utils import utc_now
 from .models import EvaluationResult
-from .security import redact_dict
+from .security import redact_dict, redact_text
 from .validation import validate_ticker, validate_tickers
 
 
@@ -109,6 +109,25 @@ CREATE TABLE IF NOT EXISTS failed_jobs (
 CREATE INDEX IF NOT EXISTS idx_failed_jobs_time
 ON failed_jobs(created_at DESC);
 
+CREATE TABLE IF NOT EXISTS provider_alert_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    code TEXT NOT NULL,
+    message TEXT NOT NULL,
+    recovery TEXT,
+    metadata_json TEXT,
+    resolved INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_provider_alert_events_time
+ON provider_alert_events(created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_provider_alert_events_provider_time
+ON provider_alert_events(provider, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS rate_limit_events (
     bucket_key TEXT NOT NULL,
     created_at REAL NOT NULL
@@ -135,6 +154,35 @@ CREATE TABLE IF NOT EXISTS scan_jobs (
 
 CREATE INDEX IF NOT EXISTS idx_scan_jobs_status_time
 ON scan_jobs(status, created_at);
+
+CREATE TABLE IF NOT EXISTS market_scan_snapshots (
+    id TEXT PRIMARY KEY,
+    scan_key TEXT NOT NULL,
+    status TEXT NOT NULL,
+    requested_by TEXT NOT NULL,
+    report_json TEXT,
+    selected_json TEXT,
+    provider_metadata_json TEXT,
+    failures_json TEXT,
+    error_code TEXT,
+    message TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    completed_at TEXT,
+    expires_at TEXT,
+    next_attempt_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_market_scan_snapshots_key_time
+ON market_scan_snapshots(scan_key, completed_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_market_scan_snapshots_status_time
+ON market_scan_snapshots(status, created_at);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_market_scan_snapshots_active
+ON market_scan_snapshots(scan_key)
+WHERE status IN ('queued', 'running');
 """
 
 
@@ -187,6 +235,25 @@ CREATE TABLE IF NOT EXISTS failed_jobs (
 CREATE INDEX IF NOT EXISTS idx_failed_jobs_time
 ON failed_jobs(created_at DESC);
 
+CREATE TABLE IF NOT EXISTS provider_alert_events (
+    id BIGSERIAL PRIMARY KEY,
+    provider TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    code TEXT NOT NULL,
+    message TEXT NOT NULL,
+    recovery TEXT,
+    metadata_json TEXT,
+    resolved INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_provider_alert_events_time
+ON provider_alert_events(created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_provider_alert_events_provider_time
+ON provider_alert_events(provider, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS rate_limit_events (
     bucket_key TEXT NOT NULL,
     created_at DOUBLE PRECISION NOT NULL
@@ -213,6 +280,35 @@ CREATE TABLE IF NOT EXISTS scan_jobs (
 
 CREATE INDEX IF NOT EXISTS idx_scan_jobs_status_time
 ON scan_jobs(status, created_at);
+
+CREATE TABLE IF NOT EXISTS market_scan_snapshots (
+    id TEXT PRIMARY KEY,
+    scan_key TEXT NOT NULL,
+    status TEXT NOT NULL,
+    requested_by TEXT NOT NULL,
+    report_json TEXT,
+    selected_json TEXT,
+    provider_metadata_json TEXT,
+    failures_json TEXT,
+    error_code TEXT,
+    message TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL,
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    expires_at TIMESTAMPTZ,
+    next_attempt_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_market_scan_snapshots_key_time
+ON market_scan_snapshots(scan_key, completed_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_market_scan_snapshots_status_time
+ON market_scan_snapshots(status, created_at);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_market_scan_snapshots_active
+ON market_scan_snapshots(scan_key)
+WHERE status IN ('queued', 'running');
 """
 
 
@@ -377,6 +473,39 @@ def record_failure(
     conn.commit()
 
 
+def record_provider_alert(
+    conn: sqlite3.Connection,
+    provider: str,
+    event_type: str,
+    severity: str,
+    code: str,
+    message: str,
+    *,
+    recovery: str = "",
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    ensure_initialized(conn)
+    conn.execute(
+        """
+        INSERT INTO provider_alert_events (
+            provider, event_type, severity, code, message, recovery, metadata_json, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(provider),
+            str(event_type),
+            str(severity),
+            str(code),
+            redact_text(str(message)),
+            redact_text(str(recovery)),
+            json.dumps(redact_dict(metadata or {}), ensure_ascii=False, sort_keys=True),
+            utc_now(),
+        ),
+    )
+    conn.commit()
+
+
 def recent_logs(conn: sqlite3.Connection, limit: int = 20) -> list[dict[str, Any]]:
     ensure_initialized(conn)
     rows = conn.execute(
@@ -405,10 +534,25 @@ def recent_failures(conn: sqlite3.Connection, limit: int = 20) -> list[dict[str,
     return [_row_with_json(row) for row in rows]
 
 
+def recent_provider_alerts(conn: sqlite3.Connection, limit: int = 20) -> list[dict[str, Any]]:
+    ensure_initialized(conn)
+    rows = conn.execute(
+        """
+        SELECT id, provider, event_type, severity, code, message, recovery,
+               metadata_json, resolved, created_at
+        FROM provider_alert_events
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    return [_row_with_json(row) for row in rows]
+
+
 def export_data(conn: sqlite3.Connection) -> dict[str, Any]:
     ensure_initialized(conn)
     export: dict[str, Any] = {}
-    for table in ("watchlist", "evaluations", "operation_logs", "failed_jobs"):
+    for table in ("watchlist", "evaluations", "operation_logs", "failed_jobs", "provider_alert_events"):
         rows = conn.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall()
         export[table] = [_row_with_json(row) for row in rows]
     return export
@@ -417,7 +561,7 @@ def export_data(conn: sqlite3.Connection) -> dict[str, Any]:
 def delete_local_data(conn: sqlite3.Connection) -> dict[str, int]:
     ensure_initialized(conn)
     deleted: dict[str, int] = {}
-    for table in ("evaluations", "operation_logs", "failed_jobs", "watchlist"):
+    for table in ("evaluations", "operation_logs", "failed_jobs", "provider_alert_events", "watchlist"):
         cursor = conn.execute(f"DELETE FROM {table}")
         deleted[table] = cursor.rowcount if cursor.rowcount is not None else 0
     conn.commit()
@@ -446,7 +590,16 @@ def _decode_json_field(value: Any, fallback: Any) -> Any:
 
 def count_rows(conn: sqlite3.Connection, table: str) -> int:
     validate_ticker("SAFE")  # keeps validation module imported in packaging smoke checks
-    allowed = {"watchlist", "evaluations", "operation_logs", "failed_jobs", "rate_limit_events", "scan_jobs"}
+    allowed = {
+        "watchlist",
+        "evaluations",
+        "operation_logs",
+        "failed_jobs",
+        "provider_alert_events",
+        "rate_limit_events",
+        "scan_jobs",
+        "market_scan_snapshots",
+    }
     if table not in allowed:
         raise NotFoundError("Unknown table.")
     row = conn.execute(f"SELECT COUNT(*) AS count FROM {table}").fetchone()

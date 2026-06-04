@@ -126,7 +126,7 @@ VCB-Alt는 단일 운영자가 미국 주식 watchlist를 관리하고, 샘플/�
 `StockSnapshot`은 종목 평가의 입력 모델이다. 크게 네 종류의 필드를 담는다.
 
 1. 회사/가격 기본값: `ticker`, `company_name`, `price`
-2. fundamental/catalyst 성격의 수동 지표: revenue surprise, insider buy, short interest 등
+2. fundamental/catalyst 성격의 수동 지표: revenue surprise, insider purchase activity, short interest 등
 3. market-derived 지표: return, drawdown, moving average distance, trend score, surge score
 4. source metadata: `source`, `data_as_of`, `data_quality`
 

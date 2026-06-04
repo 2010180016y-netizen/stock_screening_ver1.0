@@ -31,8 +31,8 @@ MVP decision: no remote signup/login exists because the product is local-first a
 
 ## 4. Result Review
 
-1. User sees ticker, combined score, setup status, primary archetype, can-enter flag, suggested size, stop loss, and rationale.
-2. User sees risk and legal disclaimer that this is decision support, not investment advice.
+1. User sees ticker, combined score, setup status, primary archetype, research eligibility flag, research size reference, risk marker, and rationale.
+2. User sees risk and legal disclaimer that this is decision support, not a trading instruction.
 3. User can request JSON output for automation.
 
 ## 5. Error Recovery

@@ -32,7 +32,7 @@ Provide a stock screening assistant that scans a configured US-equity market uni
 - Optional research-data API enrichment for fundamentals, earnings surprise, news catalysts, analyst trends, short interest, options, and insider activity.
 - Optional Alpaca active-asset universe and near-real-time quote/snapshot layer for market-wide prefiltering when licensed credentials are configured.
 - Optional SEC filing metadata layer for recent disclosure context.
-- AI explanation layer that summarizes why a ticker was selected, the key signals, risk flags, and data-quality limitations.
+- Explanation summary layer that explains why deterministic scoring and portfolio constraints surfaced a ticker, including key factors, risk flags, and data-quality limitations.
 - Data coverage scoring across market, fundamental, catalyst, and positioning groups.
 - Final candidate selection with max-position, total-exposure, duplicate-archetype, and high-volatility limits.
 - Brief selection explanation on each selected candidate.
@@ -56,14 +56,14 @@ Provide a stock screening assistant that scans a configured US-equity market uni
 
 ## 6. MVP Scope
 
-This improvement ships a Python 3.11+ local CLI package and token-protected web dashboard that can scan a market universe, prefilter live movers, enrich top names, and produce constrained candidate recommendations. It preserves the original archetype product direction by allowing price/volume data to support timing while requiring enrichment coverage before final selection.
+This improvement ships a Python 3.11+ local CLI package and token-protected web dashboard that can scan a market universe, prefilter live movers, enrich top names, and produce constrained research candidate output. It preserves the original archetype product direction by allowing price/volume data to support timing while requiring enrichment coverage before final selection.
 
 ## 7. Excluded From This Improvement
 
 - Any unrestricted public SaaS or account signup flow.
 - Any broker integration or automatic order placement.
 - Any paid external API calls by default.
-- Any investment advice claims or return guarantees.
+- Any trading-instruction claims or promised outcome claims.
 - Any collection of third-party personal information.
 
 ## 8. Success Criteria
@@ -73,7 +73,7 @@ This improvement ships a Python 3.11+ local CLI package and token-protected web 
 - `scan` and `select` produce a constrained final candidate list from the market universe when `VCB_ALT_SCAN_MODE=market_universe`.
 - Automatic market-data mode can fetch/cache EOD data without silently falling back to sample data.
 - Research-data API enrichment only runs when explicitly configured with a provider and API key.
-- Intraday quote and OpenAI summary providers only run when explicitly configured with credentials.
+- Intraday quote and OpenAI explanation-summary providers only run when explicitly configured with credentials.
 - Chart-only automatic data is blocked from final selection until enrichment coverage reaches the minimum data-quality gate.
 - Token-protected web mode can run as a controlled demo.
 - A selected ticker explains why it was selected and links to a detail page with chart, industry, current status, and rationale.
@@ -90,8 +90,8 @@ This improvement ships a Python 3.11+ local CLI package and token-protected web 
 - The app cannot be installed or imported.
 - The database cannot initialize.
 - A malformed ticker or data row crashes the app.
-- The app implies automatic trading or guaranteed returns.
+- The app implies automatic trading or promised outcomes.
 - The app calls external APIs without explicit opt-in.
 - Logs expose API keys, tokens, credentials, or private notes.
 - The app silently treats stale/manual data as verified live market data.
-- The app promotes price-only chart signals as final selections without fundamentals, catalysts, or positioning coverage.
+- The app promotes price-only chart factors as final selections without fundamentals, catalysts, or positioning coverage.

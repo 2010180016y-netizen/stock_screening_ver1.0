@@ -104,3 +104,51 @@ ON scan_jobs(status, created_at);
 
 CREATE INDEX IF NOT EXISTS idx_scan_jobs_tenant_user_time
 ON scan_jobs(tenant_id, user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS market_scan_snapshots (
+    id TEXT PRIMARY KEY,
+    scan_key TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'completed', 'failed', 'dead_letter')),
+    requested_by TEXT NOT NULL,
+    report_json JSONB,
+    selected_json JSONB,
+    provider_metadata_json JSONB,
+    failures_json JSONB,
+    error_code TEXT,
+    message TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    expires_at TIMESTAMPTZ,
+    next_attempt_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_market_scan_snapshots_key_time
+ON market_scan_snapshots(scan_key, completed_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_market_scan_snapshots_status_time
+ON market_scan_snapshots(status, created_at);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_market_scan_snapshots_active
+ON market_scan_snapshots(scan_key)
+WHERE status IN ('queued', 'running');
+
+CREATE TABLE IF NOT EXISTS provider_alert_events (
+    id BIGSERIAL PRIMARY KEY,
+    provider TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    severity TEXT NOT NULL CHECK (severity IN ('info', 'warning', 'critical')),
+    code TEXT NOT NULL,
+    message TEXT NOT NULL,
+    recovery TEXT,
+    metadata_json JSONB,
+    resolved INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_provider_alert_events_time
+ON provider_alert_events(created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_provider_alert_events_provider_time
+ON provider_alert_events(provider, created_at DESC);

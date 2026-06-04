@@ -1,0 +1,328 @@
+{
+  "base_url": "https://stockscreeningver10.vercel.app",
+  "cleanup": {
+    "attempted": 0,
+    "failed": 0,
+    "ok": 0,
+    "sample": []
+  },
+  "concurrency": 20,
+  "db_error_count": 0,
+  "elapsed_seconds": 3.14,
+  "flows_per_second": 318.49,
+  "health": {
+    "status": "healthy"
+  },
+  "jobs": {},
+  "judgment": {
+    "decision": "NOT_READY_FOR_1000_USER_SAAS",
+    "load_test_passed": false,
+    "operable_for_1000_user_saas": false,
+    "reason": "Hosted 1000-user scan-heavy test did not prove safe operation; inspect provider, queue, worker, and DB metrics."
+  },
+  "metrics": {
+    "http_status_counts": {
+      "200": 5,
+      "201": 1,
+      "2xx": 6,
+      "401": 1,
+      "4xx": 1
+    },
+    "latency_by_stage_ms": {
+      "health": {
+        "max": 387.01,
+        "p50": 387.01,
+        "p95": 387.01,
+        "p99": 387.01
+      },
+      "preflight_account_delete": {
+        "max": 464.32,
+        "p50": 464.32,
+        "p95": 464.32,
+        "p99": 464.32
+      },
+      "preflight_login": {
+        "max": 516.11,
+        "p50": 516.11,
+        "p95": 516.11,
+        "p99": 516.11
+      },
+      "preflight_register": {
+        "max": 649.85,
+        "p50": 649.85,
+        "p95": 649.85,
+        "p99": 649.85
+      },
+      "provider_health_before": {
+        "max": 398.76,
+        "p50": 398.76,
+        "p95": 398.76,
+        "p99": 398.76
+      },
+      "release_status": {
+        "max": 385.51,
+        "p50": 385.51,
+        "p95": 385.51,
+        "p99": 385.51
+      },
+      "worker_protection_probe": {
+        "max": 337.82,
+        "p50": 337.82,
+        "p95": 337.82,
+        "p99": 337.82
+      }
+    },
+    "latency_ms": {
+      "max": 649.85,
+      "p50": 398.76,
+      "p95": 649.85,
+      "p99": 649.85
+    },
+    "request_count": 7,
+    "sample_errors": []
+  },
+  "preflight": {
+    "auth_register_login_delete": {
+      "attempted": true,
+      "cleanup": {
+        "attempted": true,
+        "ok": true,
+        "status_code": 200
+      },
+      "email_domain": "example.invalid",
+      "login_status": 200,
+      "ok": true,
+      "register_status": 201
+    },
+    "worker_protection": {
+      "attempted": true,
+      "ok": true,
+      "protected": true,
+      "reason": "Worker endpoint rejected unauthenticated trigger.",
+      "status_code": 401
+    }
+  },
+  "provider": {
+    "budget_guard": {
+      "blocked": true,
+      "enabled": true,
+      "provider_calls_allowed": false,
+      "reason": "Worker trigger requires a token in --worker-token-env."
+    },
+    "call_count_delta": {
+      "alpaca": null,
+      "finnhub": null,
+      "openai": null,
+      "sec": null,
+      "template": null,
+      "yahoo": null
+    },
+    "failure_count": 0,
+    "failure_handling": {
+      "admin_alert_path_checked": false,
+      "budget_guard_blocked_provider_calls": true,
+      "covered_in_this_run": false,
+      "failure_count": 0,
+      "health_budget_checked": true,
+      "job_failure_path_checked": false,
+      "not_exercised_reason": "Worker trigger/admin context was unavailable, so hosted job failure and provider-alert paths were not exercised."
+    },
+    "failures": [],
+    "health_after": null,
+    "health_before": {
+      "alpaca": {
+        "budget": {
+          "daily_limit": 2500,
+          "remaining": 2500,
+          "used": 0,
+          "window_started_at": "2026-06-04T00:30:54.762718+00:00"
+        },
+        "circuit": {
+          "consecutive_failures": 0,
+          "open": false,
+          "open_until": null
+        },
+        "configured": true,
+        "last_error_code": null,
+        "status": "ready",
+        "total_failures": 0,
+        "total_requests": 0
+      },
+      "finnhub": {
+        "budget": {
+          "daily_limit": 500,
+          "remaining": 500,
+          "used": 0,
+          "window_started_at": "2026-06-04T00:30:54.762722+00:00"
+        },
+        "circuit": {
+          "consecutive_failures": 0,
+          "open": false,
+          "open_until": null
+        },
+        "configured": true,
+        "last_error_code": null,
+        "status": "ready",
+        "total_failures": 0,
+        "total_requests": 0
+      },
+      "openai": {
+        "budget": {
+          "daily_limit": 200,
+          "remaining": 200,
+          "used": 0,
+          "window_started_at": "2026-06-04T00:30:54.762725+00:00"
+        },
+        "circuit": {
+          "consecutive_failures": 0,
+          "open": false,
+          "open_until": null
+        },
+        "configured": false,
+        "last_error_code": null,
+        "status": "not_configured",
+        "total_failures": 0,
+        "total_requests": 0
+      },
+      "sec": {
+        "budget": {
+          "daily_limit": 500,
+          "remaining": 500,
+          "used": 0,
+          "window_started_at": "2026-06-04T00:30:54.762724+00:00"
+        },
+        "circuit": {
+          "consecutive_failures": 0,
+          "open": false,
+          "open_until": null
+        },
+        "configured": false,
+        "last_error_code": null,
+        "status": "not_configured",
+        "total_failures": 0,
+        "total_requests": 0
+      },
+      "template": {
+        "budget": {
+          "daily_limit": 1000000,
+          "remaining": 1000000,
+          "used": 0,
+          "window_started_at": "2026-06-04T00:30:54.762726+00:00"
+        },
+        "circuit": {
+          "consecutive_failures": 0,
+          "open": false,
+          "open_until": null
+        },
+        "configured": true,
+        "last_error_code": null,
+        "status": "ready",
+        "total_failures": 0,
+        "total_requests": 0
+      },
+      "yahoo": {
+        "budget": {
+          "daily_limit": 2500,
+          "remaining": 2500,
+          "used": 0,
+          "window_started_at": "2026-06-04T00:30:54.762723+00:00"
+        },
+        "circuit": {
+          "consecutive_failures": 0,
+          "open": false,
+          "open_until": null
+        },
+        "configured": true,
+        "last_error_code": null,
+        "status": "ready",
+        "total_failures": 0,
+        "total_requests": 0
+      }
+    }
+  },
+  "queue_depth": {
+    "available": true,
+    "market_completed": null,
+    "market_dead_letter": null,
+    "market_failed": null,
+    "market_latest": null,
+    "market_queued": null,
+    "market_running": null,
+    "tenant_completed": null,
+    "tenant_failed": null,
+    "tenant_queued": null,
+    "tenant_running": null
+  },
+  "reason": "worker token preflight blocked",
+  "registration_login_enqueue": {
+    "failed": 0,
+    "ok": 0,
+    "sample_errors": [],
+    "status_counts": {},
+    "unique_jobs": {}
+  },
+  "release_status": {
+    "configured_data": {
+      "ai_summary_provider": "template",
+      "ai_summary_ready": true,
+      "database_backend": "postgresql",
+      "intraday_provider": "alpaca",
+      "intraday_ready": true,
+      "market_prefilter_limit": 30,
+      "market_provider": "yahoo",
+      "market_universe_live_ready": true,
+      "market_universe_provider": "auto",
+      "rate_limit_backend": "database",
+      "research_provider": "finnhub",
+      "research_ready": true,
+      "scan_mode": "market_universe",
+      "scan_queue_enabled": true,
+      "user_auth_enabled": true,
+      "worker_configured": true,
+      "worker_cron_enabled": true
+    },
+    "do_not_publicly_launch_until": [
+      "Per-user authentication is enabled with durable sessions.",
+      "PostgreSQL or another durable production database is live.",
+      "Tenant isolation and production rate limits are deployed.",
+      "Licensed live/research provider credentials are configured and monitored.",
+      "Legal, risk, privacy, and support workflows are approved.",
+      "Hosted load test passes for the target traffic level."
+    ],
+    "operator_can_use": [
+      "Open the token-protected dashboard.",
+      "Run all-market discovery from the configured market universe.",
+      "Use watchlist tickers as an optional manual research list.",
+      "Open ticker detail pages with five-year charts, sector/industry, rationale, and AI summary.",
+      "Review provider warnings before treating a candidate as research-complete."
+    ],
+    "production_saas_ready": true,
+    "public_launch_ready": false,
+    "public_scope": "Single-operator/token-protected preview, not unrestricted public SaaS.",
+    "release_channel": "operator_trial",
+    "release_label": "Owner pre-user usage build",
+    "scoring_version": "mvp-market-v0.6.0",
+    "user_trial_ready": true,
+    "warnings": [
+      "Alpaca credentials are configured but not live-verified by provider-status; run /api/provider-diagnostics/alpaca before production scans."
+    ]
+  },
+  "run_type": "hosted_scan_heavy_1000_user",
+  "snapshot_reads": {
+    "attempted": 0,
+    "failed": 0,
+    "ok": 0,
+    "sample": []
+  },
+  "success_rate": 0.0,
+  "trigger_worker": true,
+  "users": 1000,
+  "worker": {
+    "completion_count": 0,
+    "failed_count": 0,
+    "processed_count": 0,
+    "runs": [],
+    "terminal_count": 0,
+    "triggered": true
+  }
+}

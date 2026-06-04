@@ -18,6 +18,7 @@ from typing import Any
 from .config import AppConfig
 from .errors import AppError, NotFoundError, ValidationError
 from .models import StockSnapshot
+from .provider_resilience import ProviderFailure, provider_request_json, provider_request_text
 from .sample_data import get_snapshot as get_sample_snapshot
 from .validation import validate_ticker
 
@@ -239,6 +240,11 @@ def provider_status(config: AppConfig) -> dict[str, Any]:
         warnings.append("Finnhub research provider is configured but VCB_ALT_FINNHUB_API_KEY is missing.")
     if config.intraday_data_provider == "alpaca" and not (config.alpaca_api_key and config.alpaca_api_secret):
         warnings.append("Alpaca intraday provider is configured but Alpaca credentials are missing.")
+    if config.alpaca_api_key and config.alpaca_api_secret:
+        warnings.append(
+            "Alpaca credentials are configured but not live-verified by provider-status; "
+            "run /api/provider-diagnostics/alpaca before production scans."
+        )
     if config.data_provider == "stooq" and not config.stooq_api_key:
         warnings.append("Stooq may require an API key or captcha depending on access path.")
     return {
@@ -255,6 +261,9 @@ def provider_status(config: AppConfig) -> dict[str, Any]:
         "market_snapshot_batch_size": config.market_snapshot_batch_size,
         "market_scan_requires_live_data": config.market_scan_requires_live_data,
         "market_universe_live_ready": bool(config.external_api_enabled and config.alpaca_api_key and config.alpaca_api_secret),
+        "alpaca_diagnostics_endpoint": "/api/provider-diagnostics/alpaca",
+        "provider_health_endpoint": "/api/provider-health",
+        "provider_alerts_endpoint": "/api/admin/provider-alerts",
         "research_data_provider": config.research_data_provider,
         "research_capabilities": research_capabilities,
         "research_api_configured": bool(config.finnhub_api_key) if config.research_data_provider.startswith("finnhub") else False,
@@ -268,6 +277,11 @@ def provider_status(config: AppConfig) -> dict[str, Any]:
         },
         "sec_filings_enabled": config.sec_company_facts_enabled,
         "ai_summary_provider": config.ai_summary_provider,
+        "summary_provider_label": "OpenAI explanation summary"
+        if config.ai_summary_provider == "openai" and config.openai_api_key
+        else "template summary",
+        "summary_role": "explanation_only",
+        "selection_source": "deterministic_scoring",
         "ai_summary_configured": config.ai_summary_provider == "template" or bool(config.openai_api_key),
         "enrichment_available": enrichment_available,
         "enrichment_path": "data/enrichment.csv",
@@ -426,14 +440,9 @@ def _load_alpaca_intraday(config: AppConfig, ticker: str) -> dict[str, Any]:
         },
     )
     try:
-        with urllib.request.urlopen(request, timeout=config.market_data_timeout_seconds) as response:
-            body = response.read().decode("utf-8")
-    except urllib.error.HTTPError as exc:
-        return {"intraday_error": _alpaca_http_error_message(exc)}
-    except urllib.error.URLError as exc:
-        return {"intraday_error": f"Alpaca network error: {exc.reason}"}
-    except TimeoutError:
-        return {"intraday_error": "Alpaca request timed out."}
+        body = provider_request_text(config, "alpaca", request)
+    except ProviderFailure as exc:
+        return {"intraday_error": exc.message}
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     cache_path.write_text(body, encoding="utf-8")
     try:
@@ -510,16 +519,13 @@ def _finnhub_json(config: AppConfig, ticker: str, cache_name: str, path: str, pa
         },
     )
     try:
-        with urllib.request.urlopen(request, timeout=config.market_data_timeout_seconds) as response:
-            body = response.read().decode("utf-8")
-    except (urllib.error.URLError, TimeoutError):
+        payload = provider_request_json(config, "finnhub", request)
+    except ProviderFailure:
         return {}
+    body = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     cache_path.write_text(body, encoding="utf-8")
-    try:
-        return json.loads(body)
-    except json.JSONDecodeError:
-        return {}
+    return payload
 
 
 def _finnhub_cache_path(data_dir: Path, ticker: str, cache_name: str) -> Path:
@@ -681,16 +687,13 @@ def _load_sec_filing_values(config: AppConfig, ticker: str) -> dict[str, Any]:
         },
     )
     try:
-        with urllib.request.urlopen(request, timeout=config.market_data_timeout_seconds) as response:
-            body = response.read().decode("utf-8")
-    except (urllib.error.URLError, TimeoutError):
+        payload = provider_request_json(config, "sec", request)
+    except ProviderFailure:
         return {}
+    body = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     cache_path.write_text(body, encoding="utf-8")
-    try:
-        return _sec_filing_values(json.loads(body), cik)
-    except json.JSONDecodeError:
-        return {}
+    return _sec_filing_values(payload, cik)
 
 
 def _lookup_sec_cik(config: AppConfig, ticker: str) -> str:
@@ -702,9 +705,9 @@ def _lookup_sec_cik(config: AppConfig, ticker: str) -> str:
             headers={"User-Agent": config.sec_user_agent, "Accept": "application/json,text/plain,*/*"},
         )
         try:
-            with urllib.request.urlopen(request, timeout=config.market_data_timeout_seconds) as response:
-                cached = response.read().decode("utf-8")
-        except (urllib.error.URLError, TimeoutError):
+            payload = provider_request_json(config, "sec", request)
+            cached = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        except ProviderFailure:
             return ""
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         cache_path.write_text(cached, encoding="utf-8")
@@ -886,6 +889,7 @@ def get_yahoo_snapshot(config: AppConfig, ticker_value: str) -> StockSnapshot:
         float(config.market_data_timeout_seconds),
         float(config.market_data_cache_ttl_hours),
         "1y",
+        config,
     )
     benchmark_bars: list[MarketBar] | None = None
     if ticker != "SPY":
@@ -896,6 +900,7 @@ def get_yahoo_snapshot(config: AppConfig, ticker_value: str) -> StockSnapshot:
                 float(config.market_data_timeout_seconds),
                 float(config.market_data_cache_ttl_hours),
                 "1y",
+                config,
             )
         except AppError:
             benchmark_bars = None
@@ -927,6 +932,7 @@ def get_price_history(config: AppConfig, ticker_value: str, years: int = 5) -> d
             float(config.market_data_timeout_seconds),
             float(config.market_data_cache_ttl_hours),
             range_value,
+            config,
         )
         return _history_payload(ticker, bars, "yahoo", range_value)
     if config.data_provider == "stooq" and config.external_api_enabled:
@@ -1095,7 +1101,10 @@ def _load_yahoo_bars(
     timeout_seconds: float,
     cache_ttl_hours: float,
     range_value: str = "1y",
+    config: AppConfig | None = None,
 ) -> tuple[list[MarketBar], str | None]:
+    if config is not None:
+        return _load_yahoo_bars_with_config(data_dir_value, ticker, timeout_seconds, cache_ttl_hours, range_value, config)
     return _load_yahoo_bars_cached(
         data_dir_value,
         ticker,
@@ -1104,6 +1113,28 @@ def _load_yahoo_bars(
         range_value,
         _ttl_bucket(cache_ttl_hours),
     )
+
+
+def _load_yahoo_bars_with_config(
+    data_dir_value: str,
+    ticker: str,
+    timeout_seconds: float,
+    cache_ttl_hours: float,
+    range_value: str,
+    config: AppConfig,
+) -> tuple[list[MarketBar], str | None]:
+    cache_path = _yahoo_cache_path(Path(data_dir_value), ticker, range_value)
+    json_text = _read_fresh_cache(cache_path, cache_ttl_hours)
+    if json_text is not None:
+        try:
+            return _parse_yahoo_chart_json(json_text, ticker)
+        except AppError:
+            cache_path.unlink(missing_ok=True)
+    json_text = _fetch_yahoo_chart_json(ticker, timeout_seconds, range_value, config)
+    parsed = _parse_yahoo_chart_json(json_text, ticker)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text(json_text, encoding="utf-8")
+    return parsed
 
 
 @lru_cache(maxsize=1024)
@@ -1140,7 +1171,12 @@ def _yahoo_cache_path(data_dir: Path, ticker: str, range_value: str = "1y") -> P
     return data_dir / "market_cache" / "yahoo" / STOOQ_CACHE_VERSION / f"{safe_name}{suffix}.json"
 
 
-def _fetch_yahoo_chart_json(ticker: str, timeout_seconds: float, range_value: str = "1y") -> str:
+def _fetch_yahoo_chart_json(
+    ticker: str,
+    timeout_seconds: float,
+    range_value: str = "1y",
+    config: AppConfig | None = None,
+) -> str:
     encoded_ticker = urllib.parse.quote(validate_ticker(ticker), safe="")
     url = f"{YAHOO_CHART_BASE_URL}/{encoded_ticker}?{urllib.parse.urlencode({'range': range_value, 'interval': '1d'})}"
     request = urllib.request.Request(
@@ -1150,6 +1186,14 @@ def _fetch_yahoo_chart_json(ticker: str, timeout_seconds: float, range_value: st
             "Accept": "application/json,text/plain,*/*",
         },
     )
+    if config is not None:
+        try:
+            return provider_request_text(config, "yahoo", request, timeout_seconds=timeout_seconds)
+        except ProviderFailure as exc:
+            raise NotFoundError(
+                f"Could not fetch Yahoo chart data for {ticker}. {exc.message}",
+                detail=exc.recovery,
+            ) from exc
     try:
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             return response.read().decode("utf-8")

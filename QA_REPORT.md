@@ -2,7 +2,470 @@
 
 QA date: 2026-05-18 KST
 
-Latest verification update: 2026-05-26 KST
+Latest verification update: 2026-06-04 KST
+
+## Hosted Scan-Heavy 1000-User Load Test Recheck - 2026-06-04 KST
+
+Scope:
+
+- Rechecked the deployed Vercel owner/operator-trial environment with a hosted scan-heavy 1000-user load-test runner.
+- Updated `tools/host_queue_load_test.py` so the report now records worker-protection preflight, auth register/login/delete preflight, provider-failure coverage status, and a clearer fail-closed reason when the local runner cannot access the worker secret.
+- Fixed `tools/provider_resilience_test.py` after the Yahoo fetch wrapper signature changed, so the deterministic provider outage/budget fixture runs again.
+
+Commands run:
+
+```powershell
+C:\stable-diffusion-ui\installer_files\env\python.exe tools\host_queue_load_test.py --base-url https://stockscreeningver10.vercel.app --users 1000 --concurrency 20 --tickers PLTR,MSTR,VST --timeout 30 --poll-seconds 300 --trigger-worker --worker-limit 100 --simulate-distributed-ips --confirm-production-load --confirm-provider-budget --expected-provider-calls 280 --max-provider-calls 350 --min-provider-budget-remaining 350 --snapshot-read-sample 1000 --out data\hosted_scan_heavy_1000_20260604.json
+C:\stable-diffusion-ui\installer_files\env\python.exe tools\provider_resilience_test.py
+C:\stable-diffusion-ui\installer_files\env\python.exe -m unittest tests.test_saas_auth tests.test_provider_resilience
+C:\stable-diffusion-ui\installer_files\env\python.exe -m unittest discover -s tests
+C:\stable-diffusion-ui\installer_files\env\python.exe -m compileall -q vcb_alt tests tools api
+C:\stable-diffusion-ui\installer_files\env\python.exe -m tools.lint
+C:\stable-diffusion-ui\installer_files\env\python.exe -m tools.typecheck
+git -c safe.directory=C:/Users/a/Downloads/stock_screening_ver1.0 diff --check
+```
+
+Hosted result:
+
+- Result file: `data/hosted_scan_heavy_1000_20260604.json`.
+- Final decision: `NOT_READY_FOR_1000_USER_SAAS`.
+- Load-test pass: `false`.
+- Requests executed before safe block: `7`.
+- HTTP status counts: `2xx=6`, `4xx=1`, `5xx=0`; the single `401` was the expected unauthenticated worker-protection probe.
+- Overall latency: p50 `398.76ms`, p95 `649.85ms`, p99 `649.85ms`, max `649.85ms`.
+- Auth preflight: register `201`, login `200`, account delete cleanup `200`.
+- Protected worker trigger preflight: unauthenticated `/api/admin/run-worker?limit=1` returned `401`, confirming the endpoint is protected.
+- Provider health/budget preflight: Alpaca, Finnhub, Yahoo, and template providers reported ready budgets; OpenAI and SEC were not configured.
+- Provider call budget guard: provider calls were not allowed because the local runner could not obtain a usable worker token.
+- Registration/login/enqueue load phase: `0/1000` executed because worker-trigger completion could not be authorized.
+- Worker trigger/completion: `0` processed, `0` failed, `0` completed.
+- Job polling: `0` jobs.
+- Snapshot reads: `0` attempted.
+- Queue depth: no authenticated admin queue read was executed in the blocked run.
+- DB error count: `0`.
+- Provider call count delta: not measured because no provider-heavy worker scan was triggered.
+- Provider failure handling coverage: provider health and budget were checked, but hosted job failure/dead-letter and admin provider-alert paths were not exercised because the worker/admin context was unavailable.
+
+Secret/access note:
+
+- Vercel production env pull showed worker-related keys exist, but the local runner received `VCB_ALT_WORKER_TOKEN` and `CRON_SECRET` as zero-length values. No secret values were printed or stored.
+- Without a usable worker secret, the safe behavior is to block the hosted completion test before creating 1000 tenants or consuming provider budgets.
+
+Local verification:
+
+- Provider outage/budget simulation passed with structured failures: `failure_count=3`, `provider_calls_before_budget_stop=6`, `scan_ok=true`, `select_ok=true`.
+- Targeted SaaS/provider tests passed: `26` tests.
+- Full unit test suite passed: `76` tests.
+- Compile smoke passed for `vcb_alt`, `tests`, `tools`, and `api`.
+- Lint passed: `lint ok (44 files)`.
+- Typecheck passed: `type hints ok (423 objects)`.
+- `git diff --check` passed; Git only reported existing Windows LF-to-CRLF working-copy warnings.
+
+Conclusion:
+
+- The hosted 1000-user scan-heavy completion test has not passed.
+- The product remains `NOT_READY_FOR_1000_USER_SAAS` for public operation.
+- Required next gate: run the same command from an environment that can access the production worker secret and prove 1000-user registration/login, scan enqueue, worker trigger, job polling, snapshot read, provider failure handling, cleanup, provider call deltas, queue depth, and DB error metrics with `load_test_passed=true`.
+
+## Legal Copy Decision-Support Boundary - 2026-06-04 KST
+
+Scope:
+
+- Reviewed UI, README, docs, API response labels, and legal draft pages for wording that could be interpreted as investment-action guidance before legal review.
+- Replaced action-oriented wording with decision-support, research candidate, monitoring candidate, positive factor, risk marker, and research size reference language.
+- Replaced legacy action-oriented API status output with `RESEARCH_CANDIDATE` and the legacy provider-health recommendation policy key with `final_candidate_policy`.
+- Updated Terms, Privacy, and Risk Disclosure so they clearly state they are owner/operator-trial drafts, not legal-reviewed launch documents.
+- Bumped the market-universe cache version so old cached sample scan reports with obsolete action-oriented labels are not reused.
+
+Commands run:
+
+```powershell
+C:\stable-diffusion-ui\installer_files\env\python.exe -m unittest tests.test_scoring tests.test_portfolio tests.test_web tests.test_provider_resilience
+C:\stable-diffusion-ui\installer_files\env\python.exe -m unittest discover -s tests
+C:\stable-diffusion-ui\installer_files\env\python.exe -m compileall -q vcb_alt tests
+C:\stable-diffusion-ui\installer_files\env\python.exe -m tools.lint
+git -c safe.directory=C:/Users/a/Downloads/stock_screening_ver1.0 diff --check
+rg investment-action/legal-copy phrase checks across UI/docs/API labels
+```
+
+Result:
+
+- Targeted scoring/portfolio/web/provider regression tests passed: `24` tests.
+- Full unit test suite passed: `76` tests.
+- Compile smoke passed for `vcb_alt` and `tests`.
+- Lint passed: `lint ok (44 files)`.
+- `git diff --check` passed; Git only reported existing Windows LF-to-CRLF working-copy warnings.
+- Wording search found no remaining active investment-action phrases in UI/docs/API labels. Remaining broad-search hits are internal provider/schema/test fixture names, PostgreSQL `pg_advisory_xact_lock` technical references, and an ignored generated old `data/market_universe/scan_reports/v1` cache file that is no longer used after the cache-version bump.
+
+## Explanation Summary Label Boundary - 2026-06-04 KST
+
+Scope:
+
+- Reviewed UI, README, docs, API response labels, and served JS check artifacts for wording that could imply a model directly selects stocks.
+- Preserved the existing `ai_summary` response key for compatibility, but added explicit `provider_label`, `role`, `selection_source`, and `selection_method` metadata.
+- Updated legacy summary-panel wording to `Explanation summary` / `설명 요약`.
+- Updated summary provider display so default/OpenAI-disabled mode is labeled `template summary`; OpenAI mode is labeled `OpenAI explanation summary`.
+- Updated docs to state that deterministic scoring and portfolio constraints select candidates, while OpenAI/template providers only explain those results.
+
+Commands run:
+
+```powershell
+C:\stable-diffusion-ui\installer_files\env\python.exe -m unittest tests.test_web tests.test_provider_resilience
+C:\stable-diffusion-ui\installer_files\env\python.exe -m unittest discover -s tests
+C:\stable-diffusion-ui\installer_files\env\python.exe -m compileall -q vcb_alt tests
+C:\stable-diffusion-ui\installer_files\env\python.exe -m tools.lint
+git -c safe.directory=C:/Users/a/Downloads/stock_screening_ver1.0 diff --check
+rg -n -i "<standalone legacy model-summary wording pattern>" . --glob "*.md" --glob "*.py" --glob "*.js" --glob "*.json" --glob "!node_modules/**" --glob "!.git/**"
+```
+
+Result:
+
+- Targeted web/provider regression tests passed: `17` tests.
+- Full unit test suite passed: `76` tests.
+- Compile smoke passed for `vcb_alt` and `tests`.
+- Lint passed: `lint ok (44 files)`.
+- `git diff --check` passed; Git only reported existing Windows LF-to-CRLF working-copy warnings.
+- Wording search found no remaining standalone legacy model-summary labels. Remaining `OpenAI` matches are provider-name/configuration references that identify an explanation-summary provider, not a stock-selection engine.
+
+## SaaS Legacy API Migration Gate - 2026-06-03 KST
+
+Scope:
+
+- Reviewed UI calls and server routing for legacy global `/api/watchlist`, `/api/scan`, and `/api/select`.
+- Changed SaaS mode legacy global endpoint behavior from generic validation failure to explicit `410 LEGACY_ENDPOINT_GONE`.
+- Added migration messages that point clients to tenant-scoped `/api/user/watchlist`, `/api/user/scan`, and `/api/user/select`.
+- Added served-dashboard regression coverage to prevent direct legacy global calls when `user_auth_enabled=true`.
+
+Commands run:
+
+```powershell
+C:\stable-diffusion-ui\installer_files\env\python.exe -m unittest tests.test_web
+C:\stable-diffusion-ui\installer_files\env\python.exe -m compileall -q vcb_alt tests
+C:\stable-diffusion-ui\installer_files\env\python.exe -m tools.lint
+C:\stable-diffusion-ui\installer_files\env\python.exe -m unittest discover -s tests
+git -c safe.directory=C:/Users/a/Downloads/stock_screening_ver1.0 diff --check
+```
+
+Result:
+
+- Web regression tests passed: `12` tests.
+- Full unit test suite passed: `76` tests.
+- Lint passed: `lint ok (44 files)`.
+- Compile smoke passed for `vcb_alt` and `tests`.
+- `git diff --check` passed; Git only reported existing Windows LF-to-CRLF working-copy warnings.
+
+Specific cases verified:
+
+- `GET/POST/DELETE /api/watchlist` return `410 LEGACY_ENDPOINT_GONE` in SaaS mode and point to `/api/user/watchlist`.
+- `GET/POST /api/scan` return `410 LEGACY_ENDPOINT_GONE` in SaaS mode and point to `/api/user/scan`.
+- `GET/POST /api/select` return `410 LEGACY_ENDPOINT_GONE` in SaaS mode and point to `/api/user/select`.
+- Served dashboard JavaScript uses `endpoint('/api/...', '/api/user/...')` helper calls and contains no direct `api('/api/watchlist')`, `api('/api/scan')`, or `api('/api/select')` calls.
+
+## Market Discovery Watchlist Boundary - 2026-06-03 KST
+
+Scope:
+
+- Reviewed starter watchlist seeding and manual ticker input against the market-wide discovery product direction.
+- Disabled automatic starter watchlist seeding for market-wide and production SaaS flows.
+- Moved manual ticker input into a collapsible secondary research drawer.
+- Added an explicit optional starter research-list helper button instead of automatic browser tenant seeding.
+- Added watchlist API metadata for `result_boundary`, `starter_helper_available`, and optional onboarding helper behavior.
+
+Commands run:
+
+```powershell
+C:\stable-diffusion-ui\installer_files\env\python.exe -m unittest tests.test_web
+C:\stable-diffusion-ui\installer_files\env\python.exe -m compileall -q vcb_alt tests
+C:\stable-diffusion-ui\installer_files\env\python.exe -m tools.lint
+C:\stable-diffusion-ui\installer_files\env\python.exe -m unittest discover -s tests
+git -c safe.directory=C:/Users/a/Downloads/stock_screening_ver1.0 diff --check
+```
+
+Result:
+
+- Web regression tests passed: `10` tests.
+- Full unit test suite passed: `74` tests.
+- Lint passed: `lint ok (44 files)`.
+- Compile smoke passed for `vcb_alt` and `tests`.
+- `git diff --check` passed; Git only reported existing Windows LF-to-CRLF working-copy warnings.
+
+Browser/mobile note:
+
+- Attempted to start a local smoke server for in-app browser verification, but the command was blocked by the current approval/usage limit.
+- Static UI regression coverage confirms the market-wide CTA appears in the first hero section, `.decision-area` is ordered before `.sidebar` on mobile, and the manual ticker input is in a secondary collapsible drawer.
+
+## Live-Data-Required Sample Fallback Hard Gate - 2026-06-03 KST
+
+Scope:
+
+- Reviewed the production candidate-output path for places where sample/demo market-universe output could be returned as real research candidates.
+- Added a hard gate so `VCB_ALT_MARKET_SCAN_REQUIRES_LIVE_DATA=true` fails closed unless market-universe results are backed by Alpaca stock snapshots.
+- Prevented stale sample scan-report cache and durable sample market snapshot rows from being served as fresh production candidate output.
+- Kept sample universe fallback available only for local/demo mode where live-data-required is explicitly false.
+
+Commands run:
+
+```powershell
+C:\stable-diffusion-ui\installer_files\env\python.exe -m unittest tests.test_market_universe
+C:\stable-diffusion-ui\installer_files\env\python.exe -m unittest tests.test_saas_auth
+C:\stable-diffusion-ui\installer_files\env\python.exe -m compileall -q vcb_alt tests
+C:\stable-diffusion-ui\installer_files\env\python.exe -m tools.lint
+C:\stable-diffusion-ui\installer_files\env\python.exe -m unittest discover -s tests
+git -c safe.directory=C:/Users/a/Downloads/stock_screening_ver1.0 diff --check
+```
+
+Result:
+
+- Market-universe regression tests passed: `6` tests.
+- SaaS auth/queue regression tests passed: `21` tests.
+- Full unit test suite passed: `72` tests.
+- Lint passed: `lint ok (44 files)`.
+- Compile smoke passed for `vcb_alt` and `tests`.
+- `git diff --check` passed; Git only reported existing Windows LF-to-CRLF working-copy warnings.
+
+Specific cases verified:
+
+- Live-data-required market scans raise a clear fail-closed `ValidationError` instead of returning sample universe candidates.
+- Fresh scan-report cache containing sample/demo output is deleted and not returned under live-data-required mode.
+- Cached Alpaca snapshot data remains valid when the report source starts with `alpaca:`.
+- Durable market snapshot rows containing sample/demo fallback are ignored by `/api/user/scan` snapshot reads when live-data-required mode is active.
+
+## Readiness Wording Audit - 2026-06-03 KST
+
+Scope:
+
+- Searched the full repository for active wording that could imply external beta, unrestricted release, or 1000-user SaaS readiness.
+- Replaced active external-beta/unrestricted-release phrasing with owner/operator-trial, external-release blocker, or historical gate wording.
+- Preserved past implementation history only when explicitly labeled as historical.
+- Kept `public_launch_ready=false` and `NOT_READY_FOR_1000_USER_SAAS` because those values communicate the current blocked state.
+
+Commands run:
+
+```powershell
+rg -n -i "<requested external-beta, launch-ready, and 1000-user overstatement phrase set>" . --glob '!*.pyc' --glob '!__pycache__/**' --glob '!.git/**'
+rg -n -i "<old unrestricted-release wording>" . --glob '!*.pyc' --glob '!__pycache__/**' --glob '!.git/**'
+rg -n -i "owner/operator trial|owner-trial|operator-trial|external-release|unrestricted external" README.md RELEASE_DECISION.md QA_REPORT.md OPERATIONS.md DEPLOYMENT.md PUBLIC_DEPLOYMENT.md RELEASE_CRITERIA.md SAAS_IMPLEMENTATION_PLAN.md SECURITY_COMPLIANCE_1000_USER.md IMPLEMENTATION_PLAN.md
+```
+
+Result:
+
+- The requested overstatement search returned no matches.
+- The old unrestricted-release wording search returned no matches.
+- Owner/operator-trial and external-release blocker wording is present in the primary readiness documents.
+- Current readiness remains `public_launch_ready=false` and `NOT_READY_FOR_1000_USER_SAAS`.
+
+## Market-Wide Discovery UI Realignment - 2026-06-03 KST
+
+Scope:
+
+- Read the web UI path and reoriented the first screen from manual watchlist scoring to market-wide discovery.
+- Promoted the first-screen CTA to "Scan full market / latest candidates".
+- Demoted manual ticker input to an optional research panel with API metadata that identifies it as secondary to market-wide discovery.
+- Added visible scan freshness, provider source, data coverage, and fail-closed state cards.
+- Expanded Korean mode for static labels, dynamic provider/status values, empty states, and candidate rationale text.
+- Adjusted mobile ordering so the latest candidate results appear before the optional manual research panel.
+
+Commands run:
+
+```powershell
+C:\stable-diffusion-ui\installer_files\env\python.exe -m tools.lint
+C:\stable-diffusion-ui\installer_files\env\python.exe -m unittest tests.test_web
+C:\stable-diffusion-ui\installer_files\env\python.exe -m unittest discover -s tests
+C:\stable-diffusion-ui\installer_files\env\python.exe -m compileall -q vcb_alt tests
+node --check data\served_app_check.js
+node --check data\served_detail_check.js
+```
+
+Browser smoke:
+
+- Started a local sample market-universe web server with `VCB_ALT_SCAN_MODE=market_universe`, `VCB_ALT_DATA_PROVIDER=sample`, and `VCB_ALT_MARKET_SCAN_REQUIRES_LIVE_DATA=false`.
+- English first screen showed market-wide discovery CTA, scan freshness, provider source, data coverage, fail-closed state, and optional manual research as secondary.
+- Korean mode translated UI labels, provider/status values, empty states, and rationale text; no English primary UI copy remained.
+- Scan CTA returned `7` scanned names and `3` selected research candidates in local sample mode.
+- Desktop viewport `1280x800`: primary CTA and market-wide status were visible before manual research.
+- Mobile viewport `390x820`: no horizontal overflow; selected candidate results appeared before the optional manual research panel.
+
+Result:
+
+- Lint passed: `lint ok (44 files)`.
+- Served dashboard/detail JavaScript syntax checks passed.
+- Web unit tests passed: `8` tests.
+- Full unit test suite passed: `69` tests.
+- Compile smoke passed for `vcb_alt` and `tests`.
+
+Notes:
+
+- Browser smoke initially exposed a sandbox-only cache write permission issue when the browser-spawned smoke server used the workspace `data` directory. The app path was re-run with a writable temp data directory and passed.
+- This UI work does not change the production launch gate: public/paid SaaS remains blocked until live provider diagnostics, hosted load testing, operations drills, and legal review pass.
+
+## Neon/Monitoring/Legal Operations Readiness - 2026-06-03 KST
+
+Scope:
+
+- Reviewed Neon restore, monitoring, operations, and legal handoff documents.
+- Converted the Neon backup/restore drill into an executable staging procedure with migration drift checks, sample tenant integrity checks, RTO/RPO measurement, and rollback steps.
+- Converted monitoring into incident runbooks for provider outage, worker failure, queue backlog, DB error, auth abuse, and rate-limit saturation.
+- Reframed legal review as counsel handoff only; AI does not approve legal readiness.
+- Updated Terms, Privacy, and Risk Disclosure draft status to owner/operator trial and legal-review pending.
+
+Commands run:
+
+```powershell
+C:\stable-diffusion-ui\installer_files\env\python.exe tools\ops_health_report.py --base-url https://stockscreeningver10.vercel.app --timeout 20
+C:\stable-diffusion-ui\installer_files\env\python.exe -m tools.lint
+C:\stable-diffusion-ui\installer_files\env\python.exe -m tools.typecheck
+C:\stable-diffusion-ui\installer_files\env\python.exe -m unittest discover -s tests
+C:\stable-diffusion-ui\installer_files\env\python.exe -m compileall vcb_alt tests tools api
+```
+
+Result:
+
+- `overall_status=ok`.
+- `release_channel=operator_trial`.
+- `production_saas_ready=true`.
+- `public_launch_ready=false`.
+- `database_backend=postgresql`.
+- `rate_limit_backend=database`.
+- `queue_enabled=true`.
+- `user_auth_enabled=true`.
+- `worker_cron_enabled=true`.
+- Provider warning remained: Alpaca credentials are configured but not live-verified; `/api/provider-diagnostics/alpaca` is still required before production scans.
+
+Documentation updates:
+
+- `NEON_BACKUP_RESTORE_DRILL.md`: staging restore, migration drift, sample tenant integrity, RTO/RPO, and rollback procedure documented.
+- `MONITORING_ALERTING_PLAN.md`: incident runbooks documented.
+- `OPERATIONS.md`: production incident entry points added.
+- `LEGAL_REVIEW_PACKET.md`: counsel handoff and launch restrictions documented.
+- `TERMS.md`, `PRIVACY.md`, `RISK_DISCLOSURE.md`: draft status and legal-review gate corrected.
+- `rg` verification found no active stale beta-readiness or investment-action claims outside explicit prohibited-word/legal-blocker context. Remaining advice-related hits are PostgreSQL `advisory lock` technical references or legal prohibited-word lists.
+- Lint passed: `lint ok (44 files)`.
+- Typecheck passed: `type hints ok (415 objects)`.
+- Full unit test suite passed: `68` tests.
+- Compile/build smoke passed for `vcb_alt`, `tests`, `tools`, and `api`.
+
+Remaining:
+
+- Neon staging restore has not been executed because it requires operator Neon console/API access and a selected staging branch.
+- Public, paid, or investment-advice-adjacent launch remains blocked pending counsel approval.
+
+## Hosted Scan-Heavy 1000-User Load Test Gate - 2026-06-03 KST
+
+Scope:
+
+- Updated `tools/host_queue_load_test.py` so a hosted scan-heavy run can exercise registration/login, scan enqueue, protected worker trigger, job polling, snapshot reads, provider-health budget guards, provider failure visibility, queue depth, DB error counts, provider call deltas, worker completion counts, and cleanup of generated test accounts.
+- Added a structured preflight-block report when required production secrets are not available to the test runner.
+- Added default test-account cleanup for completed load-test flows to avoid leaving 1000 generated tenants in production.
+
+Commands run:
+
+```powershell
+C:\stable-diffusion-ui\installer_files\env\python.exe tools\host_queue_load_test.py --help
+C:\stable-diffusion-ui\installer_files\env\python.exe -m tools.lint
+C:\stable-diffusion-ui\installer_files\env\python.exe -m tools.typecheck
+C:\stable-diffusion-ui\installer_files\env\python.exe tools\host_queue_load_test.py --base-url https://stockscreeningver10.vercel.app --users 1000 --concurrency 20 --tickers PLTR,MSTR,VST --timeout 30 --poll-seconds 300 --trigger-worker --worker-limit 100 --simulate-distributed-ips --confirm-production-load --confirm-provider-budget --expected-provider-calls 280 --max-provider-calls 350 --min-provider-budget-remaining 350 --snapshot-read-sample 1000 --out data\hosted_scan_heavy_1000_20260603.json
+```
+
+Production preflight checks:
+
+- `GET /api/health`: `200`, healthy.
+- `GET /api/provider-health`: `200`; Alpaca, Finnhub, Yahoo, and template providers reported `ready`; OpenAI and SEC were `not_configured`.
+- `GET /api/release-status`: `200`; `release_channel=operator_trial`, `public_launch_ready=false`, `scan_queue_enabled=true`, `worker_configured=true`, and `worker_cron_enabled=true`.
+- Manual signup preflight: `POST /api/auth/register` returned `201`; the test account was deleted with `DELETE /api/user/account?confirm=DELETE_MY_ACCOUNT`, which returned `200`.
+- Worker protection preflight: `POST /api/admin/run-worker?limit=1` without a worker token returned `401`, confirming the endpoint is protected.
+
+Hosted 1000-user result:
+
+- Result file: `data/hosted_scan_heavy_1000_20260603.json`.
+- Final decision: `NOT_READY_FOR_1000_USER_SAAS`.
+- The 1000-user scan-heavy workload was not executed beyond safe preflight because the local test runner did not have `VCB_ALT_WORKER_TOKEN`.
+- Request count executed by the tool before blocking: `3`.
+- HTTP status counts: `200=3`, `2xx=3`, `4xx=0`, `5xx=0`.
+- Overall latency: p50 `395.09ms`, p95 `421.47ms`, p99 `421.47ms`, max `421.47ms`.
+- Stage latency:
+  - `health`: p50/p95/p99 `395.09ms`.
+  - `provider_health_before`: p50/p95/p99 `421.47ms`.
+  - `release_status`: p50/p95/p99 `392.1ms`.
+- Registration/login/enqueue: `0` attempted in the guarded run because protected worker execution was impossible.
+- Worker trigger/completion: `0` processed, `0` failed, `0` completed.
+- Job polling: `0` jobs.
+- Snapshot reads: `0` attempted.
+- Queue depth: available but no authenticated admin queue read was executed in the guarded run.
+- DB error count: `0`.
+- Provider failure count: `0`.
+- Provider call count delta: not measured because no worker/provider-heavy scan was triggered.
+- Provider budget guard: blocked provider calls before execution; no provider budget was consumed by the hosted load command.
+
+Interpretation:
+
+- The tool for a real hosted 1000-user scan-heavy completion test now exists and records the required metrics.
+- This run does not prove 1000-user operability because the protected worker trigger was not executed.
+- The production API appears configured for operator-trial SaaS mode, but the operator-held worker token is required to prove scan enqueue, worker completion, polling, and snapshot read under 1000-user load.
+- Current status remains `NOT_READY_FOR_1000_USER_SAAS` until the hosted command completes with `load_test_passed=true` and provider budgets remain within guard limits.
+
+## Worker-Owned Durable Market Scan Snapshot - 2026-06-03 KST
+
+Commands run:
+
+```powershell
+& 'C:\stable-diffusion-ui\installer_files\env\python.exe' -m unittest tests.test_saas_auth tests.test_db tests.test_web
+& 'C:\stable-diffusion-ui\installer_files\env\python.exe' -m unittest discover -s tests
+& 'C:\stable-diffusion-ui\installer_files\env\python.exe' tools\lint.py
+& 'C:\stable-diffusion-ui\installer_files\env\python.exe' tools\typecheck.py
+& 'C:\stable-diffusion-ui\installer_files\env\python.exe' -m compileall vcb_alt tests
+```
+
+Results:
+
+- Added durable `market_scan_snapshots` storage for worker-owned market-universe scan reports.
+- Production SaaS `/api/user/scan` now reads the latest fresh snapshot or returns `202` with queued/pending snapshot job status.
+- Worker processing now claims market snapshot jobs before tenant jobs and writes report, selected candidates, provider metadata, freshness, and failures.
+- Added `/api/jobs/market-scan/{id}` for market snapshot job status.
+- Added retry scheduling, stale-running recovery, and `dead_letter` handling for market snapshot jobs.
+- Added admin queue-status visibility for market snapshot counts and latest job state.
+- Added regression coverage for first-request enqueue, idempotent pending response, worker refresh, fresh snapshot read, user evaluation persistence, retry scheduling, and dead-letter recovery.
+- Targeted SaaS/DB/web tests passed: `26` tests.
+- Full unit test suite passed: `62` tests.
+- Lint passed: `lint ok (42 files)`.
+- Typecheck passed: `type hints ok (378 objects)`.
+- Compile/build smoke passed.
+- Production deploy completed and `https://stockscreeningver10.vercel.app` was aliased to the new build.
+- Production `POST /api/user/scan` returned `202` with `state=queued`, a `market_*` job id, and no `items`, confirming the user request no longer executes the provider-heavy market scan directly.
+- Production `GET /api/jobs/market-scan/{id}` returned the queued snapshot job status.
+- Production `GET /api/admin/queue-status` exposed `market_scan_snapshots` counts and latest queued job metadata.
+- Production protected worker trigger was not completed from this workstation because the local shell does not have `VCB_ALT_WORKER_TOKEN`; the endpoint correctly returned `401 Worker authentication is required`.
+
+Remaining production note:
+
+- This structural change prevents concurrent users from directly duplicating provider-heavy scans, but live market results still require Alpaca diagnostics to return `ready=true`.
+- A hosted worker completion verification still requires the operator-held worker token or Vercel Cron execution.
+
+## Alpaca Credential Diagnostics Implementation - 2026-06-03 KST
+
+Commands run:
+
+```powershell
+& 'C:\stable-diffusion-ui\installer_files\env\python.exe' -m unittest tests.test_market_universe tests.test_web
+& 'C:\stable-diffusion-ui\installer_files\env\python.exe' -m unittest discover -s tests
+& 'C:\stable-diffusion-ui\installer_files\env\python.exe' tools\lint.py
+& 'C:\stable-diffusion-ui\installer_files\env\python.exe' tools\typecheck.py
+& 'C:\stable-diffusion-ui\installer_files\env\python.exe' -m compileall vcb_alt tests
+```
+
+Results:
+
+- Added secret-safe Alpaca diagnostics at `/api/provider-diagnostics/alpaca`.
+- Diagnostics checks expected Vercel env variable names, Paper Trading API acceptance, Live Trading API acceptance, and Market Data snapshot acceptance for the configured feed.
+- Diagnostics returns status/classification/next actions only; it does not return Alpaca key or secret values.
+- Targeted tests passed: `11` tests.
+- Full test suite passed: `60` tests.
+- Lint passed: `lint ok (42 files)`.
+- Typecheck passed: `type hints ok (365 objects)`.
+- Compile/build smoke passed.
+- Production deploy completed and `https://stockscreeningver10.vercel.app` was aliased to the new build.
+- Production `/api/provider-diagnostics/alpaca` returned `classification=key_context_mismatch_or_invalid`, `ready=false`, `feed=iex`, and `HTTP 401` for Paper Trading, Live Trading, and Market Data snapshot checks.
+- Production `/api/user/scan` was re-tested after deploy and still failed closed with Alpaca HTTP 401. No sample fallback candidates were returned.
+- Required operator action: regenerate the Alpaca Key ID and Secret Key as one matching pair, update both Vercel Production variables, redeploy, rerun `/api/provider-diagnostics/alpaca`, and only then rerun `/api/user/scan`.
 
 ## Market-Universe Algorithm Verification - 2026-05-26 KST
 
@@ -30,7 +493,7 @@ Results:
 Remaining live-data note:
 
 - Local verification intentionally used sample fallback because local Alpaca/Finnhub secrets were not loaded.
-- Production must set `VCB_ALT_EXTERNAL_API_ENABLED=true`, Alpaca credentials, Finnhub or CSV enrichment, and `VCB_ALT_MARKET_SCAN_REQUIRES_LIVE_DATA=true` before the service can truthfully claim live all-market recommendations.
+- Production must set `VCB_ALT_EXTERNAL_API_ENABLED=true`, Alpaca credentials, Finnhub or CSV enrichment, and `VCB_ALT_MARKET_SCAN_REQUIRES_LIVE_DATA=true` before the service can truthfully claim live all-market research candidate output.
 
 ## Current Status Summary - 2026-05-22 KST
 
@@ -175,7 +638,7 @@ Observed automatic selection:
 
 READY_FOR_PRIVATE_BETA.
 
-The app is now usable as a controlled, token-protected public demo. It is still not ready for unrestricted public SaaS or 1000-user multi-tenant operation.
+Historical 2026-05-18 judgment at that time: the app was considered usable as a controlled, token-protected demo. Current status is superseded by the 2026-06-03 owner/operator-trial judgment and Alpaca live-scan blocker.
 
 ## 8. 2026-05-19 UX Redesign Verification
 
@@ -200,7 +663,7 @@ Results:
 UX-specific conclusion:
 
 - The user-supplied dark operations-desk direction was implemented without hardcoded ticker scores, Tailwind CDN, Google Fonts, Material Symbols, or Chart.js.
-- The product direction remains focused on precise candidate selection, rationale, data freshness, and operational trust signals rather than becoming a generic filter-heavy screener.
+- The product direction remains focused on precise candidate selection, rationale, data freshness, and operational trust indicators rather than becoming a generic filter-heavy screener.
 
 Production redeploy verification:
 
@@ -261,9 +724,9 @@ Production results:
 - Production health API: passed, `200`.
 - Production provider-status API: passed, `200`, returned `yahoo` EOD price/volume capability metadata and no secrets.
 - Production selection API: passed, `200`, returned `public_label` and `scoring_version`.
-- Production browser verification: passed. Dashboard showed public-beta safety copy, legal links, public labels, and scoring version.
+- Historical production browser verification: passed. Dashboard showed safety copy, legal links, public labels, and scoring version.
 - Risk disclosure page verification: passed.
-- Screenshot artifact: `vercel-public-beta-safety-verified.png`.
+- Historical screenshot artifact: `vercel-safety-verified.png`.
 
 ## 10. 2026-05-19 1000-User SaaS Boundary Verification
 
@@ -467,7 +930,7 @@ Results:
 - Lint: passed, `lint ok (33 files)`.
 - Tests: passed, `39` tests.
 - Build/syntax check: passed.
-- Finnhub cached fixture enrichment: passed. Fundamentals, earnings surprise, news catalyst, insider buys, short interest, and option-chain open interest were applied over a Yahoo market snapshot.
+- Finnhub cached fixture enrichment: passed. Fundamentals, earnings surprise, news catalyst, insider purchase activity, short interest, and option-chain open interest were applied over a Yahoo market snapshot.
 - Secret exposure guard: passed. Provider status does not expose API key names or values.
 - Production deployment: passed. Vercel aliased deployment `stockscreeningver10-ivtlodw29-2010180016y-7667s-projects.vercel.app` to `https://stockscreeningver10.vercel.app`.
 - Production health check: passed, `/api/health` returned `200`.
@@ -479,10 +942,10 @@ Results:
 Implemented:
 
 - Added optional Alpaca intraday snapshot overlay for near-real-time quote/trade/minute-bar context.
-- Added Finnhub analyst recommendation trend parsing.
+- Added Finnhub analyst rating trend parsing.
 - Added optional SEC submissions metadata for latest filing date/type/URL and recent filing catalyst detection.
-- Added deterministic AI summary output and optional OpenAI Responses API mode with fallback to template summary.
-- Added ticker detail UI panel for AI summary plus intraday, short-interest, option put/call, and analyst-score metrics.
+- Added deterministic explanation summary output and optional OpenAI Responses API mode with fallback to template summary.
+- Added ticker detail UI panel for explanation summary plus intraday, short-interest, option put/call, and analyst-score metrics.
 - Updated `.env.example`, README, product requirements, implementation plan, and changelog.
 
 Commands run:
@@ -501,10 +964,10 @@ Results:
 - Tests: passed, `40` tests.
 - Build/syntax check: passed.
 - Full data fixture: passed. Yahoo daily chart data, Alpaca intraday snapshot, Finnhub fundamentals/news/short/options/analyst data, and SEC filings were applied without live network calls.
-- AI summary fixture: passed. `/api/ticker-analysis` returns a template summary by default and includes risk/data-quality limitations.
-- Local browser verification: passed. `/ticker/PLTR` rendered the AI summary panel, new status metrics, and no horizontal overflow.
+- Explanation summary fixture: passed. `/api/ticker-analysis` returns a template summary by default and includes risk/data-quality limitations.
+- Local browser verification: passed. `/ticker/PLTR` rendered the explanation summary panel, new status metrics, and no horizontal overflow.
 - Production deployment: passed. Vercel deployment `stockscreeningver10-q4kz5cp18-2010180016y-7667s-projects.vercel.app` was aliased to `https://stockscreeningver10.vercel.app`.
-- Production smoke: passed. `/api/health` returned `200`; provider status shows `provider=yahoo`, `research_data_provider=csv`, `intraday_data_provider=none`, `ai_summary_provider=template`; `/api/ticker-analysis?ticker=PLTR` returns scoring version `mvp-market-v0.5.0` and template AI summary.
+- Production smoke: passed. `/api/health` returned `200`; provider status shows `provider=yahoo`, `research_data_provider=csv`, `intraday_data_provider=none`, `ai_summary_provider=template`; `/api/ticker-analysis?ticker=PLTR` returns scoring version `mvp-market-v0.5.0` and template explanation summary.
 - Remaining production note: provider keys are not present in this workspace, so live Alpaca/Finnhub/OpenAI calls are structurally ready but not enabled until the operator configures credentials.
 
 ## 17. 2026-05-20 Operator Trial Finalization
@@ -532,7 +995,7 @@ Results:
 - Build/syntax check: passed.
 - Local release API: passed, `release_channel=operator_trial`, `user_trial_ready=true`, `public_launch_ready=false`.
 - Production deployment: passed. Vercel deployment `stockscreeningver10-qqroswqsv-2010180016y-7667s-projects.vercel.app` was aliased to `https://stockscreeningver10.vercel.app`.
-- Production smoke: passed. `/api/health=200`, `/api/release-status` returns `operator_trial`, and `/api/ticker-analysis?ticker=PLTR` returns `mvp-market-v0.5.0` with template AI summary.
+- Production smoke: passed. `/api/health=200`, `/api/release-status` returns `operator_trial`, and `/api/ticker-analysis?ticker=PLTR` returns `mvp-market-v0.5.0` with template explanation summary.
 
 ## 18. 2026-05-20 Alpaca Production Key Check
 
@@ -615,7 +1078,7 @@ Implemented:
 
 - Reused the already-enriched ticker snapshot inside `/api/ticker-analysis` profile generation so a detail-page request does not call the same market/research provider twice.
 - Cached Vercel serverless runtime bootstrap configuration for warm processes to avoid repeating config loading and database bootstrap work on every warm request.
-- Hardened public beta token cookies by adding `Secure` when the request arrives through HTTPS forwarding headers.
+- Hardened token-gated trial cookies by adding `Secure` when the request arrives through HTTPS forwarding headers.
 - Fixed release-status intraday readiness so `intraday_ready=false` when the selected intraday provider is `none`, even if stale Alpaca keys still exist in the deployment environment.
 
 Local verification:
@@ -644,7 +1107,7 @@ Production smoke result:
 - PLTR decision: `can_enter=true`, score `55`, archetype `AI Pick & Shovel`.
 - PLTR profile: `Technology / Software - Infrastructure`.
 - PLTR chart: `5y`, `1256` daily points.
-- AI explanation layer: `template`.
+- Explanation summary layer: `template summary`.
 - `/api/select`: passed with `2` selected candidates and `0` failures.
 
 Release judgment:
@@ -699,7 +1162,7 @@ Hosted load-test status:
 Release judgment:
 
 - The codebase now has the required SaaS control-plane pieces for PostgreSQL, per-user auth, tenant isolation, durable rate limiting, and queue-backed scans.
-- At this historical checkpoint, the live deployment was not ready for public 1000-user operation. The later section 24 records the Neon cutover and hosted health-load smoke; scan-heavy queue/provider load testing remains pending.
+- At this historical checkpoint, the live deployment was not approved for unrestricted 1000-user external operation. The later section 24 records the Neon cutover and hosted health-load smoke; scan-heavy queue/provider load testing remains pending.
 
 ## 23. 2026-05-22 Vercel Queue Cleanup, Worker Cron Path, And Hosted Load Test
 
@@ -905,7 +1368,7 @@ Release judgment:
 - The optimized code is safer for the current production SaaS control-plane path and remains suitable for controlled private beta.
 - It is still not ready for unrestricted 1000-user public SaaS until scan-heavy hosted queue/provider load tests, auth hardening, monitoring, backup/restore, and legal review are complete.
 
-## 26. 2026-05-22 Public Launch Gate Tooling Verification
+## 26. 2026-05-22 Historical External-Release Gate Tooling Verification
 
 Implemented:
 
@@ -1001,7 +1464,7 @@ C:\stable-diffusion-ui\installer_files\env\python.exe -m compileall vcb_alt test
 
 Release judgment:
 
-- Public launch gate tooling is now present and partially executed.
+- Historical external-release gate tooling is now present and partially executed. This is not current launch approval.
 - The app remains private-beta suitable.
 - Unrestricted public 1000-user launch is still blocked until worker-triggered scan-heavy hosted load test, provider quota enforcement/alerts, OAuth/MFA/RBAC implementation, Neon staging restore drill, and external legal signoff are complete.
 
@@ -1228,10 +1691,10 @@ Issue reproduced from user report:
 
 - The deployed dashboard could load, but clicking `Run scan` did not reliably show stock candidates for the user.
 
-Root cause:
+Historical root cause fixed in prior SaaS endpoint pass:
 
-- Production SaaS mode blocks the legacy global `/api/watchlist`, `/api/scan`, and `/api/select` APIs by design.
-- The dashboard button flow still used those legacy endpoints instead of tenant-scoped authenticated endpoints.
+- Production SaaS mode blocked the legacy global `/api/watchlist`, `/api/scan`, and `/api/select` APIs by design.
+- The dashboard button flow still used those legacy endpoints instead of tenant-scoped authenticated endpoints at that time.
 - In browsers with stale generated demo credentials, the automatic session bootstrap could stop after both registration and login failed.
 
 Fixes:
@@ -1239,7 +1702,7 @@ Fixes:
 - Added tenant-scoped `POST /api/user/scan` and `POST /api/user/select`.
 - Updated dashboard endpoint selection to use `/api/user/*` when per-user auth is enabled.
 - Added browser-scoped automatic tenant registration/login, stale token cleanup, and fresh credential recovery.
-- Added first-run starter watchlist seeding for browser tenants.
+- Historical legacy note: first-run starter watchlist seeding was added for browser tenants in the earlier watchlist-centered flow; current market-wide discovery keeps starter tickers behind an optional manual research helper.
 - Changed scan response to include final selection so the UI can show candidates immediately after one `Run scan` click.
 - Batched tenant evaluation persistence into one commit per scan.
 - Added code comments documenting the interactive tenant scan path and batched persistence optimization.
@@ -1305,7 +1768,7 @@ C:\stable-diffusion-ui\installer_files\env\python.exe tools\host_load_test.py --
 
 Release judgment for this issue:
 
-- The scan-button defect is fixed for controlled public demo/private beta use.
+- Historical scan-button note: the defect was fixed for the prior token-gated trial flow. Current external release remains blocked by the 2026-06-03 Alpaca live-scan status.
 - Large hosted workloads should continue using the queue-backed scan path.
 - Public paid/regulated launch still requires OAuth/email verification, admin MFA/RBAC rollout, external monitoring/alerts, provider outage/budget drills, Neon restore drill, and legal review.
 
@@ -1358,3 +1821,56 @@ Remaining:
 - Production deployment/browser verification could not run in this pass because the approval system returned a usage-limit rejection for `npx vercel --prod --yes`.
 - Local server startup for browser verification was also blocked by the same approval usage-limit rejection.
 - Provider-specific Korean error messages can be expanded later, but the main dashboard/detail analysis copy is now localized.
+
+## 31. 2026-06-03 Provider Resilience Guards
+
+Scope:
+
+- Added timeout/retry/quota-budget/circuit-breaker/fallback policy coverage for Alpaca, Finnhub, Yahoo, SEC, OpenAI, and the deterministic template summary provider.
+- Added `/api/provider-health` for secret-safe provider policy/state visibility.
+- Added durable `provider_alert_events` and `/api/admin/provider-alerts` for owner/admin provider incident review.
+- Added deterministic fixtures for Alpaca `401`, Alpaca `429`, Alpaca timeout, Alpaca malformed JSON, Finnhub quota exhaustion, Yahoo outage, and OpenAI timeout/template fallback.
+- Preserved production fail-closed behavior when `VCB_ALT_MARKET_SCAN_REQUIRES_LIVE_DATA=true`: final candidate output cannot fall back to sample/demo output.
+
+Commands attempted:
+
+```powershell
+python -m unittest tests.test_provider_resilience tests.test_web tests.test_saas_auth
+py -3 -m unittest tests.test_provider_resilience tests.test_web tests.test_saas_auth
+C:\stable-diffusion-ui\installer_files\env\python.exe -m unittest tests.test_provider_resilience tests.test_web tests.test_saas_auth
+C:\stable-diffusion-ui\installer_files\env\python.exe -m tools.lint
+C:\stable-diffusion-ui\installer_files\env\python.exe -m tools.typecheck
+C:\stable-diffusion-ui\installer_files\env\python.exe -m unittest discover -s tests
+C:\stable-diffusion-ui\installer_files\env\python.exe -m compileall vcb_alt tests tools api
+git -c safe.directory=C:/Users/a/Downloads/stock_screening_ver1.0 diff --check
+```
+
+Results:
+
+- `python -m unittest ...`: failed before test execution because `python` is not installed/discoverable on PATH in this shell.
+- `py -3 -m unittest ...`: failed before test execution because the Windows Python launcher found no installed Python 3 runtime.
+- Targeted provider/web/SaaS tests passed: `32` tests in `8.259s`.
+- Lint passed: `lint ok (44 files)`.
+- Typecheck passed: `type hints ok (415 objects)`.
+- Full unit tests passed: `68` tests in `9.618s`.
+- Compile/build smoke passed: `compileall vcb_alt tests tools api`.
+- `git diff --check`: passed with no whitespace or conflict-marker errors.
+
+Implemented fixes:
+
+- Provider HTTP calls now pass through `vcb_alt.provider_resilience`.
+- Alpaca snapshot malformed JSON raises `PROVIDER_MALFORMED_JSON` instead of silently continuing.
+- Finnhub quota-style JSON payloads raise `PROVIDER_BUDGET_EXHAUSTED`.
+- Yahoo provider outages surface as provider-aware `NotFoundError` messages.
+- OpenAI timeout/failure falls back to deterministic `template-fallback`; OpenAI remains explanation-only.
+- Worker scan failures record provider alert events when the exception is provider-originated.
+- Alert metadata and provider health output avoid API key/secret exposure.
+
+Remaining validation:
+
+- Hosted provider outage/budget drills and hosted worker load tests still need to run after deployment with production provider keys and worker token.
+
+Release judgment:
+
+- This improves provider failure containment, but it does not make the service ready for unrestricted 1000-user SaaS.
+- Current state remains owner/operator trial until live Alpaca diagnostics are ready, hosted worker/provider load tests pass again, external monitoring/alerting is connected, and legal/privacy review is complete.

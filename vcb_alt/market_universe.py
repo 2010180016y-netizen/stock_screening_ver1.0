@@ -16,14 +16,24 @@ from .config import AppConfig
 from .errors import AppError, ValidationError
 from .models import EvaluationResult, PortfolioSelection, StockSnapshot
 from .portfolio import select_portfolio
+from .provider_resilience import ProviderFailure, provider_request_json, provider_request_text
 from .providers import apply_research_enrichment, get_snapshot
 from .sample_data import SAMPLE_TICKERS
 from .scoring import evaluate_snapshot
 from .validation import validate_ticker
 
 ALPACA_TRADING_BASE_URLS = ("https://paper-api.alpaca.markets", "https://api.alpaca.markets")
+ALPACA_TRADING_CONTEXTS = (
+    ("paper", "https://paper-api.alpaca.markets"),
+    ("live", "https://api.alpaca.markets"),
+)
 ALPACA_DATA_BASE_URL = "https://data.alpaca.markets"
-UNIVERSE_CACHE_VERSION = "v1"
+UNIVERSE_CACHE_VERSION = "v2"
+LIVE_DATA_REQUIRED_MESSAGE = (
+    "Fail-closed: live Alpaca market data is required for production market-wide research candidates. "
+    "Sample/demo fallback is disabled; configure Alpaca assets and stock snapshots, or set "
+    "VCB_ALT_MARKET_SCAN_REQUIRES_LIVE_DATA=false only for local/demo mode."
+)
 
 
 @dataclass(frozen=True)
@@ -96,10 +106,16 @@ def scan_market_universe(
     if cached is not None:
         try:
             cached_result = _market_scan_result_from_json(cached)
-            cached_result.prefilter["cache"] = "hit"
-            return cached_result
+            if config.market_scan_requires_live_data and not market_scan_report_has_live_data(cached_result):
+                cache_path.unlink(missing_ok=True)
+            else:
+                cached_result.prefilter["cache"] = "hit"
+                return cached_result
         except (json.JSONDecodeError, TypeError, KeyError, ValueError):
             cache_path.unlink(missing_ok=True)
+        except ValidationError:
+            cache_path.unlink(missing_ok=True)
+            raise
 
     start = time.perf_counter()
     limit = min(universe_limit or config.market_universe_max_symbols, config.market_universe_max_symbols)
@@ -111,9 +127,7 @@ def scan_market_universe(
         evaluations = _evaluate_prefiltered_candidates(config, candidates, failures)
     else:
         if config.market_scan_requires_live_data:
-            raise ValidationError(
-                "Market-universe scan requires live Alpaca snapshots, but no live candidates were available."
-            )
+            raise live_data_required_error("No usable Alpaca snapshot candidates were returned.")
         evaluations = _evaluate_sample_universe(config, failures, limit=prefilter_limit or config.market_prefilter_limit)
         prefilter_meta["fallback"] = "sample_universe"
 
@@ -127,9 +141,48 @@ def scan_market_universe(
         universe=universe_meta,
         prefilter=prefilter_meta,
     )
+    if config.market_scan_requires_live_data:
+        ensure_live_market_scan_report(config, result)
     result.prefilter["cache"] = "miss"
     _write_market_scan_report_cache(cache_path, result)
     return result
+
+
+def live_data_required_error(reason: str | None = None) -> ValidationError:
+    message = LIVE_DATA_REQUIRED_MESSAGE
+    if reason:
+        message = f"{message} Reason: {reason}"
+    return ValidationError(message)
+
+
+def ensure_live_market_scan_report(
+    config: AppConfig,
+    report: MarketScanResult | dict[str, Any],
+    *,
+    source: str = "market scan report",
+) -> None:
+    if not config.market_scan_requires_live_data:
+        return
+    if not market_scan_report_has_live_data(report):
+        raise live_data_required_error(f"{source} is not backed by Alpaca stock snapshots.")
+
+
+def market_scan_report_has_live_data(report: MarketScanResult | dict[str, Any]) -> bool:
+    data = report.to_api_dict() if isinstance(report, MarketScanResult) else report
+    if not isinstance(data, dict):
+        return False
+    universe = data.get("universe") if isinstance(data.get("universe"), dict) else {}
+    prefilter = data.get("prefilter") if isinstance(data.get("prefilter"), dict) else {}
+    if str(universe.get("source") or "").lower() == "sample":
+        return False
+    if str(prefilter.get("fallback") or "").lower() == "sample_universe":
+        return False
+    if not str(prefilter.get("source") or "").startswith("alpaca:"):
+        return False
+    items = data.get("items")
+    if not isinstance(items, list) or not items:
+        return False
+    return all(isinstance(item, dict) and str(item.get("source") or "").startswith("alpaca:") for item in items)
 
 
 def load_market_universe(config: AppConfig, *, limit: int | None = None) -> tuple[list[UniverseEntry], dict[str, Any]]:
@@ -152,6 +205,8 @@ def load_market_universe(config: AppConfig, *, limit: int | None = None) -> tupl
             source = "csv"
 
     if not entries:
+        if config.market_scan_requires_live_data:
+            raise live_data_required_error("No Alpaca asset universe or operator CSV universe is available.")
         entries = [
             UniverseEntry(ticker=validate_ticker(ticker), name=validate_ticker(ticker), exchange="sample", source="sample")
             for ticker in SAMPLE_TICKERS
@@ -193,6 +248,11 @@ def prefilter_market_candidates(
         batch = entries[offset : offset + batch_size]
         try:
             payload = _load_alpaca_snapshot_batch(config, [entry.ticker for entry in batch])
+        except ProviderFailure as exc:
+            failures.append({"offset": offset, "code": exc.code, "message": exc.message, "recovery": exc.recovery})
+            if config.market_scan_requires_live_data:
+                raise
+            continue
         except AppError as exc:
             failures.append({"offset": offset, "code": exc.code, "message": exc.message})
             continue
@@ -220,6 +280,59 @@ def prefilter_market_candidates(
         "failures": failures[:10],
         "warnings": [] if candidates else ["No usable Alpaca snapshots were returned for the universe."],
     }
+
+
+def diagnose_alpaca_credentials(config: AppConfig, *, symbol: str = "AAPL") -> dict[str, Any]:
+    ticker = validate_ticker(symbol)
+    expected_vars = [
+        "VCB_ALT_EXTERNAL_API_ENABLED",
+        "VCB_ALT_ALPACA_API_KEY",
+        "VCB_ALT_ALPACA_API_SECRET",
+        "VCB_ALT_ALPACA_DATA_FEED",
+    ]
+    env_status = {
+        "external_api_enabled": config.external_api_enabled,
+        "key_configured": bool(config.alpaca_api_key),
+        "secret_configured": bool(config.alpaca_api_secret),
+        "feed": config.alpaca_data_feed,
+        "expected_vercel_variables": expected_vars,
+        "accepted_local_aliases": [name.removeprefix("VCB_ALT_") for name in expected_vars],
+    }
+    result: dict[str, Any] = {
+        "provider": "alpaca",
+        "ready": False,
+        "classification": "missing_config",
+        "environment": env_status,
+        "trading": {},
+        "market_data": {},
+        "next_actions": [],
+    }
+    if not config.external_api_enabled:
+        result["next_actions"].append("Set VCB_ALT_EXTERNAL_API_ENABLED=true before running live diagnostics.")
+    if not config.alpaca_api_key:
+        result["next_actions"].append("Set VCB_ALT_ALPACA_API_KEY to the Alpaca Key ID.")
+    if not config.alpaca_api_secret:
+        result["next_actions"].append("Set VCB_ALT_ALPACA_API_SECRET to the matching Alpaca Secret Key.")
+    if result["next_actions"]:
+        return result
+
+    trading: dict[str, Any] = {}
+    for context, base_url in ALPACA_TRADING_CONTEXTS:
+        trading[context] = _probe_alpaca_endpoint(config, f"{base_url}/v2/account")
+    market_data = _probe_alpaca_endpoint(
+        config,
+        f"{ALPACA_DATA_BASE_URL}/v2/stocks/snapshots?"
+        + urllib.parse.urlencode({"symbols": ticker, "feed": config.alpaca_data_feed}),
+    )
+    result["trading"] = trading
+    result["market_data"] = {"snapshot": market_data, "test_symbol": ticker, "feed": config.alpaca_data_feed}
+
+    trading_ready = any(item.get("ok") for item in trading.values())
+    market_ready = bool(market_data.get("ok"))
+    result["ready"] = trading_ready and market_ready
+    result["classification"] = _alpaca_diagnostic_classification(trading, market_data)
+    result["next_actions"] = _alpaca_diagnostic_next_actions(result["classification"], config.alpaca_data_feed)
+    return result
 
 
 def _evaluate_prefiltered_candidates(
@@ -297,16 +410,17 @@ def _request_alpaca_assets(config: AppConfig, query: str) -> str:
             headers=_alpaca_headers(config),
         )
         try:
-            with urllib.request.urlopen(request, timeout=config.market_data_timeout_seconds) as response:
-                return response.read().decode("utf-8")
-        except urllib.error.HTTPError as exc:
+            return provider_request_text(config, "alpaca", request)
+        except ProviderFailure as exc:
             last_error = exc
-            if exc.code not in {401, 403}:
-                raise ValidationError(_alpaca_error_message(exc)) from exc
-            continue
+            if exc.status_code in {401, 403}:
+                continue
+            raise exc
         except (urllib.error.URLError, TimeoutError) as exc:
             last_error = exc
             continue
+    if isinstance(last_error, ProviderFailure):
+        raise last_error
     if isinstance(last_error, urllib.error.HTTPError):
         raise ValidationError(_alpaca_error_message(last_error)) from last_error
     raise ValidationError(f"Alpaca assets request failed: {last_error}")
@@ -347,15 +461,11 @@ def _load_alpaca_snapshot_batch(config: AppConfig, symbols: list[str]) -> dict[s
             f"{ALPACA_DATA_BASE_URL}/v2/stocks/snapshots?{query}",
             headers=_alpaca_headers(config),
         )
-        try:
-            with urllib.request.urlopen(request, timeout=config.market_data_timeout_seconds) as response:
-                body = response.read().decode("utf-8")
-        except urllib.error.HTTPError as exc:
-            raise ValidationError(_alpaca_error_message(exc)) from exc
-        except (urllib.error.URLError, TimeoutError) as exc:
-            raise ValidationError(f"Alpaca snapshot request failed: {exc}") from exc
+        payload = provider_request_json(config, "alpaca", request)
+        body = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         cache_path.write_text(body, encoding="utf-8")
+        return payload
     try:
         return json.loads(body)
     except json.JSONDecodeError as exc:
@@ -504,6 +614,87 @@ def _alpaca_error_message(exc: urllib.error.HTTPError) -> str:
     return f"Alpaca market-universe request failed with HTTP {exc.code}. {body}".strip()
 
 
+def _probe_alpaca_endpoint(config: AppConfig, url: str) -> dict[str, Any]:
+    request = urllib.request.Request(url, headers=_alpaca_headers(config))
+    try:
+        with urllib.request.urlopen(request, timeout=config.market_data_timeout_seconds) as response:
+            return {
+                "ok": 200 <= int(response.status) < 300,
+                "status_code": int(response.status),
+                "message": "accepted",
+            }
+    except urllib.error.HTTPError as exc:
+        return {
+            "ok": False,
+            "status_code": exc.code,
+            "message": _alpaca_probe_error_label(exc.code),
+            "request_id": _response_header(exc, "x-request-id"),
+        }
+    except urllib.error.URLError as exc:
+        return {"ok": False, "status_code": None, "message": f"network_error:{type(exc.reason).__name__}"}
+    except TimeoutError:
+        return {"ok": False, "status_code": None, "message": "timeout"}
+
+
+def _alpaca_probe_error_label(status_code: int) -> str:
+    if status_code == 400:
+        return "invalid_request"
+    if status_code == 401:
+        return "invalid_or_mismatched_credentials"
+    if status_code == 403:
+        return "forbidden_or_feed_not_allowed"
+    if status_code == 429:
+        return "rate_limited"
+    if status_code >= 500:
+        return "provider_server_error"
+    return "provider_rejected_request"
+
+
+def _response_header(exc: urllib.error.HTTPError, name: str) -> str:
+    try:
+        return str(exc.headers.get(name) or exc.headers.get(name.upper()) or "")
+    except Exception:
+        return ""
+
+
+def _alpaca_diagnostic_classification(trading: dict[str, Any], market_data: dict[str, Any]) -> str:
+    if any(item.get("ok") for item in trading.values()) and market_data.get("ok"):
+        return "ready"
+    trading_codes = {int(item["status_code"]) for item in trading.values() if item.get("status_code")}
+    market_code = int(market_data["status_code"]) if market_data.get("status_code") else None
+    if 401 in trading_codes or market_code == 401:
+        return "key_context_mismatch_or_invalid"
+    if market_code == 403:
+        return "feed_forbidden"
+    if 429 in trading_codes or market_code == 429:
+        return "rate_limited"
+    if not any(item.get("ok") for item in trading.values()):
+        return "trading_context_not_accepted"
+    return "market_data_not_accepted"
+
+
+def _alpaca_diagnostic_next_actions(classification: str, feed: str) -> list[str]:
+    if classification == "ready":
+        return ["Run /api/user/scan and verify prefilter.source starts with alpaca."]
+    if classification == "key_context_mismatch_or_invalid":
+        return [
+            "Regenerate the Alpaca Key ID and Secret Key as one matching pair.",
+            "Confirm the pair belongs to the intended Paper or Live account, then update both Vercel Production variables.",
+            "Redeploy after changing Vercel environment variables.",
+        ]
+    if classification == "feed_forbidden":
+        return [
+            f"The configured feed '{feed}' is not allowed for this Alpaca account.",
+            "Use VCB_ALT_ALPACA_DATA_FEED=iex unless the account has SIP access.",
+            "Redeploy after changing Vercel environment variables.",
+        ]
+    if classification == "rate_limited":
+        return ["Wait for the Alpaca rate-limit window to reset, then rerun diagnostics before scanning."]
+    if classification == "trading_context_not_accepted":
+        return ["Check whether the credentials are Paper or Live keys and whether the trading account is active."]
+    return ["Check Alpaca provider status and rerun diagnostics; keep production scan fail-closed until ready=true."]
+
+
 def _read_fresh_cache(path: Path, ttl_seconds: float) -> str | None:
     if not path.exists():
         return None
@@ -526,6 +717,7 @@ def _market_scan_report_cache_path(
             "positions": max_positions,
             "feed": config.alpaca_data_feed,
             "research": config.research_data_provider,
+            "live_required": config.market_scan_requires_live_data,
             "scan_version": "market-v1",
         },
         sort_keys=True,

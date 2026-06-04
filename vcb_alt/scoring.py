@@ -163,7 +163,7 @@ def evaluate_snapshot(snapshot: StockSnapshot) -> EvaluationResult:
         rationale.append("Score is below the MVP portfolio-manager threshold of 55; wait.")
 
     warnings = [
-        "Decision support only; not investment advice.",
+        "Decision support only; not a trading instruction.",
         "No automatic trading is performed.",
     ]
     if snapshot.source.startswith("sample"):
@@ -195,7 +195,7 @@ def evaluate_snapshot(snapshot: StockSnapshot) -> EvaluationResult:
         f"Data coverage: {coverage['score']}/100 ({coverage['label']}). {coverage['detail']}"
     )
 
-    status = "BUY_CANDIDATE" if can_enter and setup == "STRONG_SETUP" else "WATCH" if can_enter else "WAIT"
+    status = "RESEARCH_CANDIDATE" if can_enter and setup == "STRONG_SETUP" else "MONITOR" if can_enter else "WAIT"
     decision_label = _decision_label(status)
     public_label = _public_label(status)
 
@@ -309,8 +309,8 @@ def assess_data_coverage(snapshot: StockSnapshot) -> dict[str, object]:
 
 def _decision_label(status: str) -> str:
     labels = {
-        "BUY_CANDIDATE": "High-scoring watchlist candidate",
-        "WATCH": "Watchlist candidate",
+        "RESEARCH_CANDIDATE": "High-scoring research candidate",
+        "MONITOR": "Monitoring candidate",
         "WAIT": "No current setup",
     }
     return labels.get(status, "Needs review")
@@ -319,8 +319,8 @@ def _decision_label(status: str) -> str:
 def _public_label(status: str) -> str:
     # Public/SaaS UI copy must describe a research workflow state, not an instruction to trade.
     labels = {
-        "BUY_CANDIDATE": "High-priority review candidate",
-        "WATCH": "Review candidate",
-        "WAIT": "Monitor only",
+        "RESEARCH_CANDIDATE": "High-priority research candidate",
+        "MONITOR": "Research candidate",
+        "WAIT": "Monitoring candidate",
     }
     return labels.get(status, "Needs review")

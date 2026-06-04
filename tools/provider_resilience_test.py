@@ -41,7 +41,12 @@ def run_provider_resilience_test() -> dict[str, Any]:
         original_fetch = providers._fetch_yahoo_chart_json
         state = {"calls": 0}
 
-        def budgeted_outage_fetch(ticker: str, timeout_seconds: float, range_value: str = "1y") -> str:
+        def budgeted_outage_fetch(
+            ticker: str,
+            timeout_seconds: float,
+            range_value: str = "1y",
+            config: AppConfig | None = None,
+        ) -> str:
             state["calls"] += 1
             raise NotFoundError(f"Simulated provider outage or budget exhaustion for {ticker}.")
 

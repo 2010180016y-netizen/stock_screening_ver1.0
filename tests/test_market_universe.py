@@ -4,10 +4,18 @@ import hashlib
 import json
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
+from unittest.mock import patch
 
 from vcb_alt.config import AppConfig
-from vcb_alt.market_universe import scan_market_universe
+from vcb_alt.errors import ValidationError
+from vcb_alt.market_universe import (
+    UNIVERSE_CACHE_VERSION,
+    _market_scan_report_cache_path,
+    diagnose_alpaca_credentials,
+    scan_market_universe,
+)
 
 
 def make_config(root: Path, **overrides: object) -> AppConfig:
@@ -39,6 +47,32 @@ class MarketUniverseTests(unittest.TestCase):
             self.assertGreaterEqual(data["count"], 3)
             self.assertIn("selection", data)
 
+    def test_live_data_required_blocks_sample_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = make_config(Path(tmp), market_scan_requires_live_data=True)
+
+            with self.assertRaises(ValidationError) as raised:
+                scan_market_universe(config, prefilter_limit=3)
+
+            message = str(raised.exception)
+            self.assertIn("Fail-closed", message)
+            self.assertIn("Sample/demo fallback is disabled", message)
+
+    def test_live_data_required_ignores_stale_sample_scan_report_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            local_config = make_config(root)
+            sample_report = scan_market_universe(local_config, prefilter_limit=3)
+            live_config = make_config(root, market_scan_requires_live_data=True)
+            live_cache = _market_scan_report_cache_path(live_config, None, 3, 3)
+            live_cache.parent.mkdir(parents=True, exist_ok=True)
+            live_cache.write_text(json.dumps(sample_report.to_api_dict()), encoding="utf-8")
+
+            with self.assertRaises(ValidationError):
+                scan_market_universe(live_config, prefilter_limit=3)
+
+            self.assertFalse(live_cache.exists())
+
     def test_market_scan_uses_cached_alpaca_snapshots_before_enrichment(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -60,7 +94,7 @@ class MarketUniverseTests(unittest.TestCase):
             )
             symbols = "PLTR,VST"
             key = hashlib.sha256((symbols + ":iex").encode("utf-8")).hexdigest()[:24]
-            cache_dir = data_dir / "market_universe" / "alpaca" / "v1" / "snapshots"
+            cache_dir = data_dir / "market_universe" / "alpaca" / UNIVERSE_CACHE_VERSION / "snapshots"
             cache_dir.mkdir(parents=True)
             (cache_dir / f"{key}.json").write_text(json.dumps(alpaca_snapshot_payload()), encoding="utf-8")
 
@@ -71,6 +105,7 @@ class MarketUniverseTests(unittest.TestCase):
                 alpaca_api_secret="secret",
                 market_universe_provider="csv",
                 market_prefilter_limit=2,
+                market_scan_requires_live_data=True,
             )
             report = scan_market_universe(config)
             data = report.to_api_dict()
@@ -80,6 +115,47 @@ class MarketUniverseTests(unittest.TestCase):
             self.assertEqual(data["count"], 2)
             self.assertTrue(all(item["source"].startswith("alpaca:iex") for item in data["items"]))
             self.assertTrue(any(item["can_enter"] for item in data["items"]))
+
+    def test_alpaca_diagnostics_classifies_invalid_credentials_without_secrets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = make_config(
+                Path(tmp),
+                external_api_enabled=True,
+                alpaca_api_key="alpaca-key-id",
+                alpaca_api_secret="alpaca-secret-value",
+            )
+            error = urllib.error.HTTPError(
+                url="https://data.alpaca.markets/v2/stocks/snapshots",
+                code=401,
+                msg="Unauthorized",
+                hdrs={"x-request-id": "req-test"},
+                fp=None,
+            )
+            with patch("vcb_alt.market_universe.urllib.request.urlopen", side_effect=error):
+                result = diagnose_alpaca_credentials(config)
+
+            rendered = json.dumps(result)
+            self.assertFalse(result["ready"])
+            self.assertEqual(result["classification"], "key_context_mismatch_or_invalid")
+            self.assertEqual(result["trading"]["paper"]["status_code"], 401)
+            self.assertEqual(result["market_data"]["snapshot"]["status_code"], 401)
+            self.assertNotIn("alpaca-key-id", rendered)
+            self.assertNotIn("alpaca-secret-value", rendered)
+
+    def test_alpaca_diagnostics_reports_ready_when_trading_and_data_are_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = make_config(
+                Path(tmp),
+                external_api_enabled=True,
+                alpaca_api_key="key",
+                alpaca_api_secret="secret",
+            )
+            with patch("vcb_alt.market_universe.urllib.request.urlopen", return_value=_FakeAlpacaResponse()):
+                result = diagnose_alpaca_credentials(config, symbol="msft")
+
+            self.assertTrue(result["ready"])
+            self.assertEqual(result["classification"], "ready")
+            self.assertEqual(result["market_data"]["test_symbol"], "MSFT")
 
 
 def alpaca_snapshot_payload() -> dict[str, object]:
@@ -101,6 +177,16 @@ def alpaca_snapshot_payload() -> dict[str, object]:
             },
         }
     }
+
+
+class _FakeAlpacaResponse:
+    status = 200
+
+    def __enter__(self) -> "_FakeAlpacaResponse":
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        return None
 
 
 if __name__ == "__main__":

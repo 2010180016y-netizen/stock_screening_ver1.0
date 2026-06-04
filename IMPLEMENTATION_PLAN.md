@@ -32,9 +32,9 @@ The implemented scan path evaluated user-entered watchlist symbols. That does no
 
 ### Remaining Production Requirement
 
-Production must set `VCB_ALT_EXTERNAL_API_ENABLED=true`, `VCB_ALT_INTRADAY_DATA_PROVIDER=alpaca`, Alpaca credentials, `VCB_ALT_RESEARCH_DATA_PROVIDER=finnhub` or `finnhub_csv`, and preferably `VCB_ALT_MARKET_SCAN_REQUIRES_LIVE_DATA=true` so sample fallback cannot be mistaken for live recommendations.
+Production must set `VCB_ALT_EXTERNAL_API_ENABLED=true`, `VCB_ALT_INTRADAY_DATA_PROVIDER=alpaca`, Alpaca credentials, `VCB_ALT_RESEARCH_DATA_PROVIDER=finnhub` or `finnhub_csv`, and preferably `VCB_ALT_MARKET_SCAN_REQUIRES_LIVE_DATA=true` so sample fallback cannot be mistaken for live research candidate output.
 
-Current status note, 2026-05-19: this was the initial implementation plan for converting a documentation-only repository into a runnable MVP. The implemented system has since advanced to a token-protected web dashboard with automatic EOD market data and a decision-first production UI. For the current architecture, read `research.md`. For input-based paging, read `plan.md`. For the next public-beta gate, read `SAAS_IMPLEMENTATION_PLAN.md`.
+Current status note, 2026-05-19: this was the initial implementation plan for converting a documentation-only repository into a runnable MVP. The implemented system has since advanced to a token-protected owner/operator-trial web dashboard with automatic EOD market data and a decision-first UI. For the current architecture, read `research.md`. For input-based paging, read `plan.md`. For the current external-release blockers, read `SAAS_IMPLEMENTATION_PLAN.md`.
 
 ## 0.13. 2026-05-24 Algorithm Review And Korean Localization
 
@@ -48,7 +48,7 @@ Implemented scope:
 - Added `ALGORITHM_REVIEW.md` documenting the provider snapshot, scoring, data-coverage gate, and final portfolio selection process.
 - Improved portfolio tie-breaking so equal combined scores prefer higher data coverage before volatility, sizing, and ticker tie-breaks.
 - Added Korean dynamic translation helpers for dashboard and ticker detail pages.
-- Translated Korean-mode display for archetype labels, public review labels, rationale bullets, precision notes, warnings, coverage labels, data source names, AI summary sections, and expert consensus copy.
+- Translated Korean-mode display for archetype labels, public review labels, rationale bullets, precision notes, warnings, coverage labels, data source names, explanation summary sections, and expert consensus copy.
 - Kept ticker symbols and company/security names unchanged.
 - Added tests for Korean dynamic translation availability and the data-coverage tie-break.
 
@@ -122,14 +122,14 @@ Validation plan:
 - Run lint, type checks, full unit tests, compile/build, release preflight, and local app startup.
 - If production credentials remain configured, run a safe release-status/protected smoke check without printing secrets.
 
-Remaining public-launch blockers:
+Remaining external-release blockers:
 
 - Scan-heavy hosted queue load testing against PostgreSQL.
 - Provider outage and budget tests.
 - Centralized monitoring/alerts and Neon backup/restore drill.
 - OAuth/email verification, MFA/RBAC, WAF hardening, and legal-reviewed launch docs.
 
-## 0.9. 2026-05-22 Public Launch Gate Tooling
+## 0.9. 2026-05-22 Historical External-Release Gate Tooling
 
 User request:
 
@@ -237,11 +237,11 @@ Deployment status after 2026-05-22 cutover:
 - Hosted `/api/health` load smoke passed after cutover with `1000/1000` HTTP 200 responses and `0` errors.
 - Remaining launch work is scan-heavy queue/provider load testing, monitoring, backup/restore, auth hardening, WAF, and legal review.
 
-## 0. 2026-05-19 Public-Beta Gate Update
+## 0. 2026-05-19 Historical External-Release Gate Update
 
 The latest production deployment at `https://stockscreeningver10.vercel.app` now renders the dark decision-first screening workspace with real API data, final candidate cards, actionable/excluded groupings, provider status, and score-detail modals.
 
-Before moving toward public beta, the next implementation pass must keep the current product direction intact:
+Historical note: this entry described a controlled evaluation gate, not current launch approval. Before moving beyond owner/operator trial, the next implementation pass must keep the current product direction intact:
 
 - Preserve VCB-Alt as a decision-support screening desk, not a generic filter-heavy screener.
 - Keep automatic trading out of scope.
@@ -312,7 +312,7 @@ User correction:
 Expert consensus for this gate:
 
 - Product/PM: keep VCB-Alt as a precision screening desk, not a chart-only momentum picker.
-- Quant: price/volume signals can contribute to setup timing, but final selection needs market, fundamental, catalyst, and positioning coverage.
+- Quant: price/volume factors can contribute to setup timing, but final selection needs market, fundamental, catalyst, and positioning coverage.
 - Data Engineering: add a manual enrichment overlay now, then replace it with licensed/provider-backed feeds later.
 - Compliance: if enrichment is missing, block final-selection language instead of implying a research-complete candidate.
 
@@ -353,20 +353,20 @@ Risk controls:
 - Failed research calls return empty enrichment and leave data coverage below the selection gate.
 - API keys stay in environment variables and are never returned by provider status.
 
-## 0.5. 2026-05-20 Full Data + AI Explanation Layer
+## 0.5. 2026-05-20 Full Data + Explanation Summary Layer
 
 Goal:
 
-- Preserve the VCB-Alt decision-support workflow while adding the data layers users expect from a serious stock screener: near-real-time quote, fundamentals, earnings, news/disclosures, analyst trend, short interest, options, and AI explanation.
+- Preserve the VCB-Alt decision-support workflow while adding the data layers users expect from a serious stock screener: near-real-time quote, fundamentals, earnings, news/disclosures, analyst trend, short interest, options, and explanation summaries.
 
 Implementation scope:
 
 - Add `VCB_ALT_INTRADAY_DATA_PROVIDER=none|alpaca` with Alpaca credentials, feed, and short TTL cache.
 - Keep Yahoo/Stooq as daily chart and technical engines; add Alpaca only as a quote/snapshot overlay so missing live data cannot break the scan.
-- Extend Finnhub enrichment with analyst recommendation trend parsing.
+- Extend Finnhub enrichment with analyst rating trend parsing.
 - Add optional SEC submissions metadata via `data.sec.gov` for latest filing type/date/URL and a 30-day filing catalyst flag.
-- Add `VCB_ALT_AI_SUMMARY_PROVIDER=template|openai`; use deterministic template summaries by default and call OpenAI Responses API only when explicitly configured.
-- Surface AI summary, intraday quote, short interest, option put/call ratio, and analyst score on ticker detail pages.
+- Add `VCB_ALT_AI_SUMMARY_PROVIDER=template|openai`; use deterministic template summaries by default and call OpenAI Responses API only when explicitly configured for explanation summaries.
+- Surface explanation summary, intraday quote, short interest, option put/call ratio, and analyst score on ticker detail pages.
 
 Risk controls:
 
@@ -376,7 +376,7 @@ Risk controls:
 
 Tests:
 
-- Local cache fixtures verify Alpaca snapshot, Finnhub research/analyst data, SEC filings, and AI summary without network or credentials.
+- Local cache fixtures verify Alpaca snapshot, Finnhub research/analyst data, SEC filings, and template explanation summary without network or credentials.
 
 ## 0.6. 2026-05-21 Operator Trial Stabilization
 
@@ -527,6 +527,6 @@ CLI UX will include:
 ## 14. Risks And Mitigations
 
 - Risk: The original docs imply richer functionality than MVP. Mitigation: document MVP boundaries and avoid fake live-data claims.
-- Risk: Stock decision-support can be mistaken for investment advice. Mitigation: include disclaimers and keep manual final decision.
+- Risk: Stock decision-support can be mistaken for trading instructions. Mitigation: include disclaimers and keep manual final decision.
 - Risk: External APIs can cost money or leak data. Mitigation: disable by default and log only redacted config state.
 - Risk: Encoding-damaged docs confuse users. Mitigation: create clean operational docs and leave originals as historical specs.

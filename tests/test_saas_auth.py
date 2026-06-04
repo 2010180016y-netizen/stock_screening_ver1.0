@@ -4,14 +4,22 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from vcb_alt.auth import hash_password, verify_password
 from vcb_alt.config import AppConfig, load_config
-from vcb_alt.db import connect, init_db
+from vcb_alt.db import connect, init_db, record_provider_alert
 from vcb_alt.errors import UnauthorizedError
-from vcb_alt.job_queue import run_queued_scan_jobs
-from vcb_alt.job_queue import queue_status, recover_stale_jobs
-from vcb_alt.job_queue import _claim_next_job, _decode_job
+from vcb_alt.job_queue import (
+    _claim_next_job,
+    _complete_market_scan_job,
+    _decode_job,
+    get_fresh_market_scan_snapshot,
+    queue_status,
+    recover_stale_jobs,
+    recover_stale_market_scan_jobs,
+    run_queued_scan_jobs,
+)
 from vcb_alt.rate_limit import DatabaseRateLimiter, InMemoryRateLimiter
 from vcb_alt.tenant_store import (
     add_user_watchlist,
@@ -216,6 +224,155 @@ class SaasAuthTests(unittest.TestCase):
                 with self.assertRaises(UnauthorizedError):
                     require_user(conn, login["session_token"])
 
+    def test_production_market_scan_uses_worker_owned_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = make_config(Path(tmp))
+            config = AppConfig(
+                **{
+                    **config.__dict__,
+                    "scan_mode": "market_universe",
+                    "scan_queue_enabled": True,
+                    "worker_token": "worker-token-123456",
+                    "worker_cron_enabled": True,
+                    "production_saas_mode": True,
+                    "intraday_cache_ttl_seconds": 120,
+                }
+            )
+            with connect(config) as conn:
+                init_db(conn)
+                init_saas_db(conn)
+                user = create_user(conn, email="market-owner@example.com", password="very-secure-password")
+                login = login_user(conn, email="market-owner@example.com", password="very-secure-password")
+                headers = {"authorization": f"Bearer {login['session_token']}"}
+
+                first = handle_api(config, "POST", "/api/user/scan", "", {}, headers)
+                self.assertTrue(first.ok)
+                self.assertEqual(first.status_code, 202)
+                self.assertEqual(first.data["state"], "queued")
+                job_id = first.data["job"]["id"]
+
+                second = handle_api(config, "POST", "/api/user/scan", "", {}, headers)
+                self.assertTrue(second.ok)
+                self.assertEqual(second.status_code, 202)
+                self.assertEqual(second.data["job"]["id"], job_id)
+
+                worker = run_queued_scan_jobs(config, conn, limit=1)
+                self.assertEqual(worker["processed"], 1)
+                self.assertEqual(worker["failed"], 0)
+
+                job_status = handle_api(config, "GET", f"/api/jobs/market-scan/{job_id}", "", None, headers)
+                self.assertTrue(job_status.ok)
+                self.assertEqual(job_status.data["status"], "completed")
+                self.assertEqual(job_status.data["report"]["scan_mode"], "market_universe")
+
+                fresh = handle_api(config, "POST", "/api/user/scan", "", {}, headers)
+                self.assertTrue(fresh.ok)
+                self.assertEqual(fresh.status_code, 200)
+                self.assertEqual(fresh.data["scan_mode"], "market_universe")
+                self.assertEqual(fresh.data["snapshot"]["served_from"], "durable_snapshot")
+                self.assertGreaterEqual(fresh.data["count"], 1)
+
+                row = conn.execute(
+                    """
+                    SELECT COUNT(*) AS count
+                    FROM tenant_evaluations
+                    WHERE tenant_id = ? AND user_id = ?
+                    """,
+                    (user["tenant_id"], user["id"]),
+                ).fetchone()
+                self.assertEqual(int(row["count"]), fresh.data["count"])
+
+    def test_live_data_required_does_not_serve_sample_durable_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = make_config(Path(tmp))
+            config = AppConfig(
+                **{
+                    **config.__dict__,
+                    "scan_mode": "market_universe",
+                    "scan_queue_enabled": True,
+                    "production_saas_mode": True,
+                    "market_scan_requires_live_data": True,
+                    "intraday_cache_ttl_seconds": 120,
+                }
+            )
+            sample_report = {
+                "scan_mode": "market_universe",
+                "items": [{"ticker": "PLTR", "source": "sample-placeholder"}],
+                "count": 1,
+                "universe": {"source": "sample"},
+                "prefilter": {"source": "unavailable", "fallback": "sample_universe"},
+                "selection": {"selected": []},
+                "failures": [],
+                "snapshot_ttl_seconds": 120,
+            }
+            with connect(config) as conn:
+                init_db(conn)
+                init_saas_db(conn)
+                create_user(conn, email="live-gate@example.com", password="very-secure-password")
+                login = login_user(conn, email="live-gate@example.com", password="very-secure-password")
+                _complete_market_scan_job(conn, "market_sample_snapshot", sample_report, insert_if_missing=True)
+
+                self.assertIsNone(get_fresh_market_scan_snapshot(config, conn))
+
+                response = handle_api(
+                    config,
+                    "POST",
+                    "/api/user/scan",
+                    "",
+                    {},
+                    {"authorization": f"Bearer {login['session_token']}"},
+                )
+                self.assertTrue(response.ok)
+                self.assertEqual(response.status_code, 202)
+                self.assertEqual(response.data["state"], "queued")
+                self.assertNotIn("items", response.data)
+
+    def test_market_scan_worker_retries_then_dead_letters(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = make_config(Path(tmp))
+            config = AppConfig(
+                **{
+                    **config.__dict__,
+                    "scan_mode": "market_universe",
+                    "scan_queue_enabled": True,
+                    "worker_token": "worker-token-123456",
+                    "worker_cron_enabled": True,
+                    "production_saas_mode": True,
+                }
+            )
+            with connect(config) as conn:
+                init_db(conn)
+                init_saas_db(conn)
+                create_user(conn, email="retry@example.com", password="very-secure-password")
+                login = login_user(conn, email="retry@example.com", password="very-secure-password")
+                headers = {"authorization": f"Bearer {login['session_token']}"}
+                queued = handle_api(config, "POST", "/api/user/scan", "", {}, headers)
+                job_id = queued.data["job"]["id"]
+
+                with patch("vcb_alt.job_queue.scan_market_universe", side_effect=RuntimeError("provider down")):
+                    worker = run_queued_scan_jobs(config, conn, limit=1)
+                self.assertEqual(worker["processed"], 1)
+                self.assertEqual(worker["failed"], 1)
+                retry_row = handle_api(config, "GET", f"/api/jobs/market-scan/{job_id}", "", None, headers)
+                self.assertEqual(retry_row.data["status"], "queued")
+                self.assertEqual(retry_row.data["error_code"], "MARKET_SCAN_FAILED")
+                self.assertIsNotNone(retry_row.data["next_attempt_at"])
+
+                old_started = "2026-05-22T00:00:00+00:00"
+                conn.execute(
+                    """
+                    UPDATE market_scan_snapshots
+                    SET status = ?, attempts = ?, started_at = ?, next_attempt_at = ?
+                    WHERE id = ?
+                    """,
+                    ("running", 3, old_started, None, job_id),
+                )
+                conn.commit()
+                recovered = recover_stale_market_scan_jobs(conn, max_running_seconds=1, max_attempts=3)
+                self.assertEqual(recovered["dead_lettered"], 1)
+                dead = handle_api(config, "GET", f"/api/jobs/market-scan/{job_id}", "", None, headers)
+                self.assertEqual(dead.data["status"], "dead_letter")
+
     def test_worker_endpoint_requires_token_and_processes_queue(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config = make_config(Path(tmp))
@@ -244,6 +401,39 @@ class SaasAuthTests(unittest.TestCase):
             worker = handle_api(config, "POST", "/api/admin/run-worker", "worker_token=worker-token-123456", {}, {})
             self.assertTrue(worker.ok)
             self.assertEqual(worker.data["processed"], 1)
+
+    def test_admin_provider_alerts_are_owner_scoped_and_redacted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = make_config(Path(tmp))
+            with connect(config) as conn:
+                init_db(conn)
+                init_saas_db(conn)
+                create_user(conn, email="alerts@example.com", password="very-secure-password")
+                login = login_user(conn, email="alerts@example.com", password="very-secure-password")
+                record_provider_alert(
+                    conn,
+                    "alpaca",
+                    "fixture",
+                    "critical",
+                    "PROVIDER_AUTH_FAILED",
+                    "bad key alpaca-secret-value-1234567890",
+                    metadata={"api_key": "alpaca-key-id-1234567890"},
+                )
+
+            alerts = handle_api(
+                config,
+                "GET",
+                "/api/admin/provider-alerts",
+                "",
+                None,
+                {"authorization": f"Bearer {login['session_token']}"},
+            )
+
+            rendered = str(alerts.data)
+            self.assertTrue(alerts.ok)
+            self.assertEqual(alerts.data["items"][0]["provider"], "alpaca")
+            self.assertNotIn("alpaca-secret-value-1234567890", rendered)
+            self.assertNotIn("alpaca-key-id-1234567890", rendered)
 
     def test_job_decode_handles_postgres_datetime_and_json_objects(self) -> None:
         decoded = _decode_job(

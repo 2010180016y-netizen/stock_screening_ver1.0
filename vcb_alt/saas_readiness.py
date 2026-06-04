@@ -75,9 +75,12 @@ READINESS_ITEMS = [
         current_state=(
             "A durable database-backed scan job table, enqueue API, job status API, "
             "worker run-once command, protected worker endpoint, and daily Vercel Cron route exist. "
-            "PostgreSQL job claiming now uses an atomic SKIP LOCKED claim path."
+            "Market-universe production scans now use worker-owned durable snapshots so user requests read a "
+            "fresh shared result or enqueue/status-check a refresh instead of calling providers directly. "
+            "PostgreSQL job claiming uses SKIP LOCKED, and snapshot jobs include retry, stale-running recovery, "
+            "and dead-letter states."
         ),
-        required_state="Worker observability, retries, stale-running recovery, dead-letter handling, and scheduled scan policies.",
+        required_state="Worker observability, scheduled refresh policies, and hosted scan-heavy provider load evidence.",
     ),
     ReadinessItem(
         key="provider_budgeting",
@@ -124,8 +127,8 @@ READINESS_ITEMS = [
         priority="P1",
         current_state=(
             "Local 1000-user / 30,000-evaluation simulation passed. Hosted /api/health load smoke passed after "
-            "Neon cutover for 1000 requests at concurrency 25 with 0 errors. Scan-heavy deployed queue load, "
-            "provider outage, and budget tests are still pending."
+            "Neon cutover for 1000 requests at concurrency 25 with 0 errors. Historical queue-load tests exist, "
+            "but current scan-heavy deployed provider load must be rerun after Alpaca diagnostics return ready."
         ),
         required_state="Staging load tests for 1000 users, 30k daily evaluations, provider outages, and tenant isolation.",
     ),

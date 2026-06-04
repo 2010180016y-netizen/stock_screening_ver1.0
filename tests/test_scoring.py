@@ -13,8 +13,9 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(result.setup_strength, "STRONG_SETUP")
         self.assertTrue(result.can_enter)
         self.assertGreaterEqual(result.combined_score, 70)
-        self.assertEqual(result.decision_label, "High-scoring watchlist candidate")
-        self.assertEqual(result.public_label, "High-priority review candidate")
+        self.assertEqual(result.status, "RESEARCH_CANDIDATE")
+        self.assertEqual(result.decision_label, "High-scoring research candidate")
+        self.assertEqual(result.public_label, "High-priority research candidate")
         self.assertTrue(result.scoring_version.startswith("mvp-market-"))
 
     def test_aapl_sample_is_not_entry_candidate(self) -> None:

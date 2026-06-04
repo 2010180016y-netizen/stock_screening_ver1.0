@@ -423,7 +423,7 @@ def _print_evaluation(evaluation: dict[str, Any]) -> None:
     print(f"Combined score: {evaluation['combined_score']}")
     print(f"Can enter: {evaluation['can_enter']}")
     print(f"Suggested size: {evaluation['suggested_size_pct']}%")
-    print(f"Stop loss: {evaluation['stop_loss']}")
+    print(f"Risk marker: {evaluation['stop_loss']}")
     print("Rationale:")
     for item in evaluation["rationale"]:
         print(f"- {item}")

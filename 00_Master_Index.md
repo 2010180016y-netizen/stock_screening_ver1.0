@@ -113,7 +113,7 @@ Day 28: Phase 1 첫 4주 audit
 - **Rationale**: 시드 적음 + 집중 운용
 - **Trade-off**: Concentration risk vs Diversification
 
-### Decision 3: Drawdown Buying 추가
+### Decision 3: Drawdown Recovery 추가
 - **결정**: Moderate (-10~-15%) +20% boost, Deep (-15~-25%) +25% boost
 - **Rationale**: 1980-2024 데이터, "Bull 확정 후 진입은 늦다" 사용자 의문 해결
 - **Risk**: Catching falling knife — Stop -8%로 mitigation
@@ -137,7 +137,7 @@ Day 28: Phase 1 첫 4주 audit
 - 6 Archetype Detector 시스템 신설 (Phase 1)
 - Portfolio Manager 3 종목 최적 (Phase 2)
 - 4 복잡계 모듈 추가 (Phase 3)
-- Drawdown Buying 추가
+- Drawdown Recovery 추가
 - Module 1 v2 Surge Predictor (BB+AVWAP+RSI)
 
 ### P0/P1 Fixes (2026.05)

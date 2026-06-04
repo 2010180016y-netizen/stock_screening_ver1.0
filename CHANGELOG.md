@@ -1,5 +1,239 @@
 # Changelog
 
+## 1.3.14-hosted-1000-load-recheck - 2026-06-04
+
+### Changed
+
+- Enhanced `tools/host_queue_load_test.py` with worker-protection preflight, auth register/login/delete preflight, provider-failure coverage reporting, and a clearer fail-closed report when the local runner cannot access a usable worker secret.
+- Fixed `tools/provider_resilience_test.py` to match the current Yahoo fetch wrapper signature so the deterministic provider outage/budget fixture runs again.
+- Recorded the 2026-06-04 hosted Vercel preflight result in `QA_REPORT.md` and `RELEASE_DECISION.md`.
+
+### Verified
+
+- Hosted Vercel preflight wrote `data/hosted_scan_heavy_1000_20260604.json`: `7` requests, `6` successful `2xx`, `1` expected worker-protection `401`, p50 `398.76ms`, p95 `649.85ms`, p99 `649.85ms`.
+- Worker endpoint protection was confirmed, auth register/login/delete cleanup passed, and provider budget guard blocked provider-heavy worker execution because the local runner could not obtain a usable worker secret.
+- Provider outage/budget simulation passed, targeted SaaS/provider tests passed `26`, full unit suite passed `76`, lint/typecheck/compile smoke passed, and `git diff --check` passed with only Windows LF-to-CRLF warnings.
+- Current decision remains `NOT_READY_FOR_1000_USER_SAAS`; the 1000-user worker-completion phase did not execute.
+
+## 1.3.13-legal-copy-decision-support-boundary - 2026-06-04
+
+### Changed
+
+- Replaced investment-action wording in UI/API labels with decision-support, research candidate, monitoring candidate, positive factor, risk marker, and research size reference wording.
+- Replaced legacy action-oriented status output with `RESEARCH_CANDIDATE`; secondary eligible output now uses `MONITOR`.
+- Renamed the legacy provider-health recommendation policy key to `final_candidate_policy`.
+- Reworded Terms, Privacy, and Risk Disclosure as owner/operator-trial drafts that are not legal-reviewed and not usable for public, paid, or unrestricted launch until counsel approval.
+- Reworded README, product requirements, operations, release, monitoring, algorithm, and legacy spec docs to avoid action-instruction and promised-outcome language.
+- Bumped market-universe cache version to avoid serving stale cached scan reports with old action-oriented labels.
+
+### Verified
+
+- Local checks passed: targeted scoring/portfolio/web/provider-resilience tests `24`, full unit suite `76`, lint `44` files, compile smoke, `git diff --check`, and active legal-copy wording search.
+
+## 1.3.12-explanation-summary-labels - 2026-06-04
+
+### Changed
+
+- Clarified that deterministic scoring and portfolio constraints select research candidates; OpenAI/template providers only generate explanation summaries.
+- Added `provider_label`, `role`, `selection_source`, and `selection_method` metadata to ticker analysis summary responses while preserving the existing `ai_summary` compatibility key.
+- Updated legacy summary-panel wording to `Explanation summary` / `설명 요약`.
+- Updated provider labels so disabled OpenAI/default mode displays as `template summary` and OpenAI mode displays as `OpenAI explanation summary`.
+- Updated README, product requirements, implementation plan, operations, legal handoff, operator guide, algorithm review, QA notes, and served JS check artifacts to remove wording that made model/template text look like the selection engine.
+
+### Verified
+
+- Local checks passed: targeted web/provider tests `17`, full unit suite `76`, lint `44` files, compile smoke, and `git diff --check`.
+- Wording search found no remaining standalone legacy model-summary labels; remaining `OpenAI` matches are provider names or explanation-summary configuration.
+
+## 1.3.11-saas-legacy-api-migration-gate - 2026-06-03
+
+### Changed
+
+- SaaS mode now returns `410 LEGACY_ENDPOINT_GONE` for legacy global `/api/watchlist`, `/api/scan`, and `/api/select` paths when `user_auth_enabled=true`.
+- The legacy response includes a migration message pointing clients to tenant-scoped `/api/user/watchlist`, `/api/user/scan`, or `/api/user/select`.
+- Added UI regression coverage proving the served dashboard uses the tenant-aware endpoint helper instead of direct legacy global calls.
+
+### Verified
+
+- Local checks passed: web tests `12`, full unit suite `76`, lint `44` files, compile smoke, and `git diff --check`.
+
+## 1.3.10-market-discovery-watchlist-boundary - 2026-06-03
+
+### Changed
+
+- Disabled automatic starter watchlist seeding for `market_universe` and production SaaS flows.
+- Reframed starter tickers as an explicit optional onboarding helper that only fills the manual research drawer.
+- Converted the manual ticker input into a secondary collapsible research drawer so the first-screen primary action remains market-wide scan/latest candidates.
+- Extended watchlist API metadata with result-boundary and starter-helper fields so clients do not confuse watchlist contents with market-wide research candidate output.
+
+### Verified
+
+- Local checks passed: web tests `10`, full unit suite `74`, lint `44` files, compile smoke, and `git diff --check`.
+- Browser smoke was not run because starting the local server was blocked by the current approval/usage limit; static responsive assertions verify mobile ordering keeps `.decision-area` before `.sidebar`.
+
+## 1.3.9-live-data-required-fail-closed - 2026-06-03
+
+### Changed
+
+- Added production live-data validation for market-universe scan reports so `VCB_ALT_MARKET_SCAN_REQUIRES_LIVE_DATA=true` only allows Alpaca snapshot-backed results.
+- Blocked sample universe fallback before candidate evaluation when live market data is required.
+- Added `live_required` to the scan-report cache key and invalidated fresh cache entries that are not backed by Alpaca snapshots.
+- Stopped fresh durable market scan snapshots from being served when they contain sample/demo fallback data under live-data-required mode.
+
+### Added
+
+- Added regression coverage for fail-closed sample fallback, stale sample scan-report cache invalidation, valid cached Alpaca snapshot scans, and durable sample snapshot rejection.
+
+### Verified
+
+- Local checks passed: market-universe tests `6`, SaaS auth/queue tests `21`, full unit suite `72`, lint `44` files, compile smoke, and `git diff --check`.
+
+## 1.3.8-readiness-wording-audit - 2026-06-03
+
+### Changed
+
+- Replaced remaining active public-beta/public-launch wording with owner/operator-trial, external-release blocker, or historical gate wording.
+- Renamed public-beta/public-launch criteria headings in release, implementation, SaaS, security, operations, legal, and UX planning docs where they could be mistaken for current approval.
+- Removed the stale served-JavaScript external-beta display mapping so the UI does not preserve an obsolete readiness state.
+
+### Verified
+
+- `rg` found no remaining active matches for the requested public-beta, launch-ready, and 1000-user overstatement phrase set.
+- A separate unrestricted-release wording search returned no matches for the old phrasing; the current status remains represented through `owner/operator trial`, `public_launch_ready=false`, and `NOT_READY_FOR_1000_USER_SAAS`.
+
+## 1.3.7-market-wide-discovery-ui - 2026-06-03
+
+### Changed
+
+- Reoriented the web dashboard around market-wide discovery instead of manual watchlist scoring.
+- Moved the primary first-screen action to "Scan full market / latest candidates" and demoted manual ticker input to an optional research panel.
+- Added first-screen scan freshness, provider source, data coverage, and fail-closed state cards so users can understand data posture before reading candidates.
+- Updated Korean mode so UI labels, dynamic provider/status values, empty states, and candidate rationale copy are Korean except ticker/company/data identifiers.
+- Changed mobile layout order so latest candidate results appear before the optional manual research panel.
+
+### Added
+
+- Added watchlist API metadata that marks manual watchlists as optional research when market-wide discovery is the active product mode.
+- Added regression tests for market-wide discovery UI regions, Korean served-JS translations, secondary watchlist metadata, and mobile result-before-watchlist ordering.
+- Added secret-safe stderr traceback logging for unexpected HTTP route errors.
+
+### Verified
+
+- Local checks passed: lint `44` files, served dashboard/detail JavaScript syntax checks, compile smoke, and full unit suite `69` tests.
+- Browser smoke passed against a local sample market-universe server: English first screen, Korean translation, scan CTA, selected candidates, rationale, provider/data coverage labels, desktop `1280x800`, mobile `390x820`, and no horizontal overflow.
+- Browser smoke initially exposed a sandbox-only cache write permission issue when using the workspace data directory; the app path itself was verified with a temp smoke data directory and `/api/scan` returned `7` scanned names with `3` selected research candidates.
+
+## 1.3.6-ops-restore-legal-runbooks - 2026-06-03
+
+### Added
+
+- Rewrote `NEON_BACKUP_RESTORE_DRILL.md` as an executable staging restore runbook with migration drift checks, sample tenant integrity checks, RTO/RPO measurement, rollback procedure, and pass/fail criteria.
+- Rewrote `MONITORING_ALERTING_PLAN.md` as an incident runbook covering provider outage, worker failure, queue backlog, Neon/DB errors, auth abuse, and rate-limit saturation.
+- Reframed `LEGAL_REVIEW_PACKET.md` as a counsel handoff and marked public, paid, and investment-advice-adjacent launch as blocked until written counsel approval.
+- Updated Terms, Privacy, and Risk Disclosure drafts to owner/operator-trial status and removed stale trial-status and research-output wording.
+
+### Changed
+
+- Updated `tools/ops_health_report.py` to read release-status `configured_data` so PostgreSQL, queue, worker, auth, and durable rate-limit posture are not reported as `null`.
+- Added operations entry points in `OPERATIONS.md` for provider, worker, queue, DB, auth-abuse, and rate-limit incidents.
+- Added hosted scan-heavy load-test evidence and current NOT_READY_FOR_1000_USER_SAAS judgment to QA/release documentation.
+
+### Verified
+
+- Redacted hosted operations health check returned `overall_status=ok`, `release_channel=operator_trial`, and provider warning that Alpaca still needs live diagnostics before production scans.
+- Neon restore drill remains pending operator-side staging branch execution; it is now documented as a required launch gate.
+
+## 1.3.5-provider-resilience-guards - 2026-06-03
+
+### Added
+
+- Added a shared provider resilience layer for Alpaca, Finnhub, Yahoo, SEC, OpenAI, and the deterministic template summary provider.
+- Added provider timeout, retry, quota budget, circuit breaker, fallback-policy, and secret-safe health reporting configuration.
+- Added `/api/provider-health` for operator-safe provider policy/state checks.
+- Added durable `provider_alert_events` storage and `/api/admin/provider-alerts` for owner/admin provider incident review.
+- Added fixtures for Alpaca `401`, Alpaca `429`, Alpaca timeout, Alpaca malformed JSON, Finnhub quota exhaustion, Yahoo outage, and OpenAI timeout/template fallback.
+
+### Changed
+
+- Routed Alpaca snapshots/assets, Finnhub enrichment, SEC filings, Yahoo chart fetches, and OpenAI summaries through the common provider policy layer.
+- Production live-data-required scans remain fail-closed: provider failures prevent final candidate output instead of falling back to sample/demo output.
+- Worker scan failures now create provider alert events when a provider-originated failure is detected.
+- Provider status now links to provider health and provider alert endpoints.
+
+### Verified
+
+- `git diff --check` passed with no whitespace/conflict errors.
+- Targeted provider/web/SaaS tests passed: `32` tests.
+- Full local verification passed: lint `44` files, typecheck `415` objects, unittest `68` tests, and compile/build smoke.
+
+## 1.3.4-worker-owned-market-snapshots - 2026-06-03
+
+### Added
+
+- Added durable `market_scan_snapshots` storage for market-universe scan reports, selected candidates, provider metadata, freshness, failures, retry state, and dead-letter state.
+- Added worker-owned market snapshot processing before tenant watchlist jobs.
+- Added `/api/jobs/market-scan/{id}` for global market snapshot job status.
+- Added admin queue-status visibility for market snapshot counts and latest job state.
+- Added regression tests for snapshot enqueue/idempotency, worker refresh, fresh reads, retry scheduling, and dead-letter recovery.
+
+### Changed
+
+- In production SaaS market-universe mode, `/api/user/scan` now returns a fresh durable snapshot or a `202` queued/pending job status instead of directly executing provider-heavy scans.
+- `/api/jobs/scan` now uses the same durable market snapshot path in `market_universe` mode.
+- SaaS readiness copy now reflects worker-owned market snapshots and the need to rerun hosted provider load tests after Alpaca is fixed.
+
+### Verified
+
+- Targeted SaaS/DB/web tests passed.
+- Full unit test suite, lint, typecheck, and compile/build smoke passed locally.
+- Production deploy completed; `POST /api/user/scan` returned `202` with a queued market snapshot job instead of executing a direct provider-heavy scan.
+- Production market-scan job status and admin queue-status visibility were verified.
+- Protected worker trigger correctly rejected the local verification attempt without `VCB_ALT_WORKER_TOKEN`.
+
+## 1.3.3-owner-trial-readiness-copy - 2026-06-03
+
+### Changed
+
+- Replaced active external-release readiness wording across README, deployment, operations, release, QA, and web UI copy with owner/operator-trial wording.
+- Reframed prior 1000-user and queue-load successes as historical evidence, not current public-launch approval.
+- Updated current public-readiness wording to require `public_launch_ready=false`, `NOT_READY_FOR_1000_USER_SAAS`, Alpaca diagnostics `ready=true`, and live market-universe scan verification before any external release claim.
+
+### Verified
+
+- Ran `rg` for stale external-release readiness wording; only explicit not-ready status values remained.
+
+## 1.3.2-alpaca-credential-diagnostics - 2026-06-03
+
+### Added
+
+- Added secret-safe Alpaca diagnostics at `/api/provider-diagnostics/alpaca`.
+- Added Alpaca diagnostic coverage for Paper Trading, Live Trading, and Market Data snapshot endpoint acceptance.
+- Added regression tests proving diagnostics classify invalid credentials without returning key or secret values.
+
+### Changed
+
+- Provider status now points operators to the Alpaca diagnostics endpoint when Alpaca credentials are configured but not live-verified.
+- Provider key setup docs now require `/api/provider-diagnostics/alpaca` after Vercel env changes.
+- Release and QA docs now state that production remains blocked while Alpaca returns HTTP 401.
+
+### Verified
+
+- Targeted diagnostics/web tests passed.
+- Full unit test suite, lint, typecheck, and compile/build smoke passed locally.
+- Production deploy completed and `/api/provider-diagnostics/alpaca` returned `key_context_mismatch_or_invalid` with Alpaca HTTP `401` for Paper Trading, Live Trading, and Market Data snapshot checks.
+- Production `/api/user/scan` was re-tested and failed closed with Alpaca HTTP `401`, returning no sample fallback candidates.
+
+## 1.3.1-operability-review - 2026-06-03
+
+### Added
+
+- Added `OPERABILITY_REVIEW.md` with the current production readiness decision, live API verification findings, public-launch blockers, removal candidates, prioritized improvement list, and copy-ready follow-up implementation prompts.
+
+### Verified
+
+- Production `/api/config`, `/api/provider-status`, `/api/release-status`, and `/api/saas-readiness` were checked against `https://stockscreeningver10.vercel.app`.
+- Production authenticated `/api/user/scan` was checked and failed closed with Alpaca market-universe `HTTP 401`, confirming the live all-market scan path is still not operable for unrestricted external release.
+
 ## 1.3.0-market-universe-discovery - 2026-05-26
 
 ### Added
@@ -27,7 +261,7 @@
 ### Changed
 
 - Final selection tie-breaks now prefer higher `data_coverage_score` before volatility and sizing tie-breaks.
-- Korean UI mode now translates dynamic dashboard/detail strings, including archetype labels, public review labels, rationale bullets, precision notes, warnings, data coverage labels, AI summary sections, and expert consensus copy.
+- Korean UI mode now translates dynamic dashboard/detail strings, including archetype labels, public review labels, rationale bullets, precision notes, warnings, data coverage labels, explanation summary sections, and expert consensus copy.
 - English UI mode remains unchanged; ticker symbols and company/security names remain untranslated.
 
 ### Verified
@@ -44,7 +278,7 @@
 
 - Fixed the public SaaS dashboard scan button by routing authenticated users to tenant-scoped `/api/user/scan` and `/api/user/select` instead of the legacy global `/api/scan` and `/api/select` endpoints that are blocked in SaaS mode.
 - Added automatic browser-scoped tenant session recovery so stale local demo credentials no longer leave the dashboard unable to scan.
-- Added automatic starter watchlist seeding for new browser tenants so first-run scans return visible candidates.
+- Historical legacy note: automatic starter watchlist seeding was added for new browser tenants in the earlier watchlist-centered flow; current market-wide discovery uses only an optional starter research helper.
 
 ### Changed
 
@@ -190,7 +424,7 @@
 
 ### Added
 
-- Added `/api/release-status` so the deployed app can report whether it is an owner trial build or public launch build.
+- Added `/api/release-status` so the deployed app can report whether it is an owner/operator-trial build or external-release build.
 - Added `OPERATOR_TRIAL_GUIDE.md` with the owner usage URL, workflow checklist, provider mode, and public-launch blockers.
 - Added `PROVIDER_KEYS_SETUP.md` with safe Vercel/local instructions for Alpaca, Finnhub, SEC, and OpenAI provider keys.
 
@@ -204,10 +438,10 @@
 
 - Added optional Alpaca intraday snapshot overlay with latest quote/trade/minute-bar cache fields.
 - Added SEC submissions metadata enrichment for latest filing type, date, URL, and recent filing catalyst flag.
-- Added Finnhub analyst recommendation trend parsing for analyst buy/hold/sell counts and revision score.
-- Added deterministic AI explanation summaries with optional OpenAI Responses API mode and local cache fallback.
-- Added ticker detail AI summary panel plus intraday, short-interest, option put/call, and analyst-score metrics.
-- Added cache-fixture tests for Alpaca, Finnhub analyst data, SEC filings, and AI summary output.
+- Added Finnhub analyst rating trend parsing for broker-rating counts and revision score.
+- Added deterministic explanation summaries with optional OpenAI Responses API mode and local cache fallback.
+- Added ticker detail explanation summary panel plus intraday, short-interest, option put/call, and analyst-score metrics.
+- Added cache-fixture tests for Alpaca, Finnhub analyst data, SEC filings, and explanation summary output.
 
 ### Changed
 
@@ -295,7 +529,7 @@
 
 ### Added
 
-- Added public-beta safety layer with SaaS-safe `public_label` values on evaluation results.
+- Added external-review safety layer with SaaS-safe `public_label` values on evaluation results.
 - Added `/api/provider-status` to expose provider capabilities, cache TTL, timeout, and warnings without secrets.
 - Added starter `TERMS.md`, `PRIVACY.md`, and `RISK_DISCLOSURE.md`.
 - Added dashboard links for Risk Disclosure, Privacy, and Terms.
@@ -304,7 +538,7 @@
 ### Changed
 
 - Updated dashboard copy from direct trade-action wording to neutral review wording while preserving internal audit status fields.
-- Updated implementation and SaaS plans to reflect the deployed decision-first UI and the public-beta safety-layer gate.
+- Updated implementation and SaaS plans to reflect the deployed decision-first UI and external-review safety gate.
 
 ## 0.5.3 - 2026-05-19
 
@@ -361,7 +595,7 @@
 
 ### Changed
 
-- Web server now seeds the sample watchlist on first run when `VCB_ALT_AUTO_SEED_SAMPLE=true`.
+- Historical legacy note: the web server seeded the sample watchlist on first run when `VCB_ALT_AUTO_SEED_SAMPLE=true`; current market-wide discovery and production SaaS flows ignore this auto-seed path.
 - Scoring now incorporates market-derived trend and surge bonuses while preserving the existing archetype model.
 - Documentation now distinguishes local/private use, token-protected public demo use, and true 1000-user SaaS requirements.
 

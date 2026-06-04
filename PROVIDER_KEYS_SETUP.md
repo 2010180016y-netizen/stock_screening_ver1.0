@@ -1,6 +1,6 @@
 # Provider Keys Setup
 
-Last updated: 2026-05-21 KST
+Last updated: 2026-06-03 KST
 
 This file explains how to enable the full data version before inviting external users.
 
@@ -11,6 +11,7 @@ Do not paste real API keys into chat. Add them through Vercel Environment Variab
 - Local `.env`: not present unless the operator creates it.
 - Finnhub production key is verified and can be used for the owner trial.
 - Alpaca production variables are present, but the live provider returned HTTP 401 during production checks.
+- `/api/provider-diagnostics/alpaca` is available for a secret-safe credential check across Paper Trading, Live Trading, and Market Data snapshot endpoints.
 - Current owner-trial deployment should use:
   - `VCB_ALT_DATA_PROVIDER=yahoo`
   - `VCB_ALT_RESEARCH_DATA_PROVIDER=finnhub`
@@ -19,7 +20,7 @@ Do not paste real API keys into chat. Add them through Vercel Environment Variab
 
 That means the app is usable for owner workflow testing, but full live research is not enabled yet.
 
-## Recommended Production Variables
+## Suggested Production Variables
 
 Set these in Vercel Project Settings -> Environment Variables -> Production.
 
@@ -79,7 +80,7 @@ VCB_ALT_SEC_USER_AGENT=vcb-alt-stock-screener your-email@example.com
 
 Replace `your-email@example.com` with an operator email address.
 
-### AI Explanation Layer
+### Explanation Summary Layer
 
 Use local deterministic summaries by default:
 
@@ -88,7 +89,7 @@ VCB_ALT_AI_SUMMARY_PROVIDER=template
 VCB_ALT_AI_SUMMARY_CACHE_TTL_HOURS=12
 ```
 
-Use OpenAI only when you want paid AI-generated summaries:
+Use OpenAI only when you want paid explanation summaries. Stock selection remains deterministic scoring and portfolio constraints:
 
 ```dotenv
 VCB_ALT_AI_SUMMARY_PROVIDER=openai
@@ -199,6 +200,7 @@ $base='https://stockscreeningver10.vercel.app'
 Invoke-WebRequest -UseBasicParsing "$base/api/health"
 Invoke-WebRequest -UseBasicParsing "$base/api/release-status?token=$token"
 Invoke-WebRequest -UseBasicParsing "$base/api/provider-status?token=$token"
+Invoke-WebRequest -UseBasicParsing "$base/api/provider-diagnostics/alpaca?token=$token"
 Invoke-WebRequest -UseBasicParsing "$base/api/ticker-analysis?ticker=PLTR&token=$token"
 ```
 
@@ -224,3 +226,6 @@ Check these items:
 4. Do not add surrounding quotes or spaces.
 5. If the Secret Key was lost, regenerate the key pair in Alpaca and update both Vercel variables.
 6. Keep `VCB_ALT_ALPACA_DATA_FEED=iex` unless the Alpaca account has SIP access.
+7. Run `/api/provider-diagnostics/alpaca` after every Vercel env update. `ready=true` is required before production market-universe scans can be trusted.
+8. If diagnostics returns `key_context_mismatch_or_invalid`, replace both `VCB_ALT_ALPACA_API_KEY` and `VCB_ALT_ALPACA_API_SECRET` as a freshly generated pair, then redeploy.
+9. If diagnostics returns `feed_forbidden`, set `VCB_ALT_ALPACA_DATA_FEED=iex` unless the account explicitly has SIP access, then redeploy.

@@ -56,8 +56,8 @@ def make_result(ticker: str, score: int, *, coverage: int = 0) -> EvaluationResu
         can_enter=True,
         suggested_size_pct=10.0,
         stop_loss=90.0,
-        status="WATCH",
-        decision_label="Watchlist candidate",
+        status="MONITOR",
+        decision_label="Monitoring candidate",
         source="yahoo",
         data_coverage_score=coverage,
     )

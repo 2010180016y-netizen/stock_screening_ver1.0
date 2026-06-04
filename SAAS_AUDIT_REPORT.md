@@ -52,7 +52,7 @@ Three parallel reviews were run:
 - Do not expose the current CLI over HTTP.
 - Do not add 1000 users to the current SQLite schema.
 - Do not enable paid/live APIs without budgets, retries, caching, and tests.
-- Do not market `BUY_CANDIDATE`, suggested size, or stop loss as personalized investment advice.
+- Do not market candidate status, research size reference, or risk marker as personalized trade instructions.
 - Do not skip legal/privacy review.
 
 ## 8. Correct Path
@@ -63,4 +63,3 @@ Three parallel reviews were run:
 4. Add tenant/user/account data model.
 5. Add legal-reviewed product language.
 6. Run staging load/security/compliance gates before 1000-user beta.
-
