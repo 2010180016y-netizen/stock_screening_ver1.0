@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.3.15-ci-hosted-load-gate-workflow - 2026-06-04
+
+### Added
+
+- Added `.github/workflows/hosted-scan-heavy-load-test.yml`, a manual GitHub Actions gate for the hosted scan-heavy 1000-user worker-completion test.
+- The workflow requires `VCB_ALT_WORKER_TOKEN` or `CRON_SECRET`, runs compile/lint/targeted SaaS/provider tests, executes `tools/host_queue_load_test.py`, uploads the JSON report, and fails unless `load_test_passed=true`, worker completion, snapshot reads, queue depth, provider failure handling, and zero DB errors are proven.
+
+### Notes
+
+- This adds the CI/operations runner path needed for the next gate. The gate still requires a usable production worker secret configured in GitHub repository secrets before it can prove 1000-user SaaS readiness.
+
 ## 1.3.14-hosted-1000-load-recheck - 2026-06-04
 
 ### Changed

@@ -1,0 +1,133 @@
+name: Hosted scan-heavy load test
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "Deployed base URL"
+        required: true
+        default: "https://stockscreeningver10.vercel.app"
+      users:
+        description: "Hosted users to simulate"
+        required: true
+        default: "1000"
+      concurrency:
+        description: "Concurrent client flows"
+        required: true
+        default: "20"
+      expected_provider_calls:
+        description: "Expected provider call budget for this run"
+        required: true
+        default: "280"
+      max_provider_calls:
+        description: "Hard provider-call guard for this run"
+        required: true
+        default: "350"
+      min_provider_budget_remaining:
+        description: "Minimum provider budget remaining before worker trigger"
+        required: true
+        default: "350"
+
+permissions:
+  contents: read
+
+jobs:
+  hosted-scan-heavy-load-test:
+    name: Hosted 1000-user worker completion gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      VCB_ALT_WORKER_TOKEN: ${{ secrets.VCB_ALT_WORKER_TOKEN }}
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
+      VCB_ALT_WEB_ACCESS_TOKEN: ${{ secrets.VCB_ALT_WEB_ACCESS_TOKEN }}
+      RESULT_PATH: data/hosted_scan_heavy_1000_ci.json
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Resolve worker secret
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${VCB_ALT_WORKER_TOKEN}" ] && [ -n "${CRON_SECRET}" ]; then
+            echo "::add-mask::${CRON_SECRET}"
+            echo "VCB_ALT_WORKER_TOKEN=${CRON_SECRET}" >> "${GITHUB_ENV}"
+          fi
+          if [ -z "${VCB_ALT_WORKER_TOKEN}" ] && [ -z "${CRON_SECRET}" ]; then
+            echo "Missing VCB_ALT_WORKER_TOKEN or CRON_SECRET repository secret." >&2
+            exit 1
+          fi
+
+      - name: Compile smoke
+        run: python -m compileall -q vcb_alt tests tools api
+
+      - name: Lint
+        run: python -m tools.lint
+
+      - name: Unit tests
+        run: python -m unittest tests.test_saas_auth tests.test_provider_resilience
+
+      - name: Run hosted scan-heavy load test
+        run: >
+          python tools/host_queue_load_test.py
+          --base-url "${{ inputs.base_url }}"
+          --users "${{ inputs.users }}"
+          --concurrency "${{ inputs.concurrency }}"
+          --tickers PLTR,MSTR,VST
+          --timeout 30
+          --poll-seconds 300
+          --trigger-worker
+          --worker-limit 100
+          --simulate-distributed-ips
+          --confirm-production-load
+          --confirm-provider-budget
+          --expected-provider-calls "${{ inputs.expected_provider_calls }}"
+          --max-provider-calls "${{ inputs.max_provider_calls }}"
+          --min-provider-budget-remaining "${{ inputs.min_provider_budget_remaining }}"
+          --snapshot-read-sample "${{ inputs.users }}"
+          --out "${RESULT_PATH}"
+
+      - name: Assert load-test gate passed
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          result_path = Path(os.environ["RESULT_PATH"])
+          report = json.loads(result_path.read_text(encoding="utf-8"))
+          required = {
+              "load_test_passed": report["judgment"]["load_test_passed"],
+              "worker_completion_count": report["worker"]["completion_count"],
+              "snapshot_reads_ok": report["snapshot_reads"]["ok"],
+              "provider_failure_handling_covered": report["provider"]["failure_handling"]["covered_in_this_run"],
+              "queue_depth_available": report["queue_depth"]["available"],
+              "db_error_count": report["db_error_count"],
+          }
+          print(json.dumps(required, indent=2, sort_keys=True))
+          if not report["judgment"]["load_test_passed"]:
+              raise SystemExit("hosted load test did not pass")
+          if report["worker"]["completion_count"] < 1:
+              raise SystemExit("worker completion was not proven")
+          if report["snapshot_reads"]["ok"] < int(report["users"]):
+              raise SystemExit("snapshot reads did not cover all users")
+          if not report["provider"]["failure_handling"]["covered_in_this_run"]:
+              raise SystemExit("provider failure handling path was not covered")
+          if not report["queue_depth"]["available"]:
+              raise SystemExit("queue depth was unavailable")
+          if int(report["db_error_count"]) != 0:
+              raise SystemExit("database errors were observed")
+          PY
+
+      - name: Upload load-test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hosted-scan-heavy-load-test-report
+          path: ${{ env.RESULT_PATH }}
+          if-no-files-found: ignore
