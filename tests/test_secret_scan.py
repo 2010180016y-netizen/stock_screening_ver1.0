@@ -18,8 +18,8 @@ class SecretScanTests(unittest.TestCase):
             return scan_file(path)
 
     def test_detects_hosted_query_string_token(self) -> None:
-        """This is the exact shape of the token that leaked through documentation."""
-        findings = self.scan_text("https://stockscreeningver10.vercel.app/?token=vcb-beta-20260518-4f6b9c2d8a7e")
+        """Mirrors the shape of the token that leaked, without repeating its value."""
+        findings = self.scan_text("https://app.example.net/?token=svc-beta-19990101-a1b2c3d4e5f6a7b8")
         self.assertEqual(len(findings), 1)
         self.assertTrue(
             findings[0].endswith(("possible assigned secret", "possible query-string token")),

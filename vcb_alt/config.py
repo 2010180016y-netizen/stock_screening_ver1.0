@@ -1,11 +1,27 @@
 from __future__ import annotations
 
+import hashlib
 import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from .errors import ValidationError
+
+# SHA-256 of credentials known to be publicly exposed. Storing the digest rather than the
+# value keeps the secret out of the repository while still letting the app refuse to boot
+# if a leaked credential is configured again. Add an entry whenever a secret is burned.
+REVOKED_SECRET_HASHES = frozenset(
+    {
+        # Operator-trial VCB_ALT_WEB_ACCESS_TOKEN, committed in plain text alongside the
+        # live deployment URL until 2026-08-17.
+        "a66ac56bcfb714a83477aa0813fb23eced35209f2adb18d24d98d44da5bbabb6",
+    }
+)
+
+
+def _is_revoked_secret(value: str) -> bool:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest() in REVOKED_SECRET_HASHES
 
 
 @dataclass(frozen=True)
@@ -129,6 +145,11 @@ def load_config(root_dir: Path | None = None) -> AppConfig:
     web_access_token = get("WEB_ACCESS_TOKEN", "")
     if public_web_enabled and len(web_access_token) < 16:
         raise ValidationError("Public web mode requires VCB_ALT_WEB_ACCESS_TOKEN with at least 16 characters.")
+    if web_access_token and _is_revoked_secret(web_access_token):
+        raise ValidationError(
+            "VCB_ALT_WEB_ACCESS_TOKEN matches a credential that was publicly exposed in this "
+            "repository's history. Generate a new random token before starting the app."
+        )
     market_data_timeout_seconds = _parse_positive_float(get("MARKET_DATA_TIMEOUT_SECONDS", "10"), "MARKET_DATA_TIMEOUT_SECONDS")
     market_data_cache_ttl_hours = _parse_positive_float(get("MARKET_DATA_CACHE_TTL_HOURS", "12"), "MARKET_DATA_CACHE_TTL_HOURS")
     provider_retry_attempts = _parse_positive_int(get("PROVIDER_RETRY_ATTEMPTS", "2"), "PROVIDER_RETRY_ATTEMPTS")
