@@ -16,6 +16,9 @@ from .security import redact_dict, redact_text
 from .validation import validate_ticker, validate_tickers
 
 
+_TENANT_COLUMN_READY_FLAG = "_vcb_alt_provider_alert_tenant_ready"
+
+
 class ManagedConnection(sqlite3.Connection):
     def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> bool:
         try:
@@ -362,14 +365,34 @@ def ensure_initialized(conn: sqlite3.Connection) -> None:
 
 
 def _ensure_provider_alert_tenant_column(conn: sqlite3.Connection) -> None:
+    """Backfill provider_alert_events.tenant_id on databases created before it existed.
+
+    ensure_initialized() calls this on every database operation, so the happy path must
+    stay lock-free: probe the catalog first and issue DDL only when the column is really
+    missing. An unconditional ALTER TABLE takes an ACCESS EXCLUSIVE lock on PostgreSQL
+    even when it is a no-op, which would serialize every concurrent request. The result
+    is cached per connection so steady-state requests skip the probe entirely.
+    """
+    if getattr(conn, _TENANT_COLUMN_READY_FLAG, False):
+        return
     if _is_postgres(conn):
-        conn.execute("ALTER TABLE provider_alert_events ADD COLUMN IF NOT EXISTS tenant_id TEXT")
-        conn.execute(
+        row = conn.execute(
             """
-            CREATE INDEX IF NOT EXISTS idx_provider_alert_events_tenant_time
-            ON provider_alert_events(tenant_id, created_at DESC)
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'provider_alert_events'
+              AND column_name = 'tenant_id'
             """
-        )
+        ).fetchone()
+        if row is None:
+            conn.execute("ALTER TABLE provider_alert_events ADD COLUMN IF NOT EXISTS tenant_id TEXT")
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_provider_alert_events_tenant_time
+                ON provider_alert_events(tenant_id, created_at DESC)
+                """
+            )
+        _mark_tenant_column_ready(conn)
         return
     columns = {
         str(row["name"])
@@ -378,12 +401,20 @@ def _ensure_provider_alert_tenant_column(conn: sqlite3.Connection) -> None:
     }
     if "tenant_id" not in columns:
         conn.execute("ALTER TABLE provider_alert_events ADD COLUMN tenant_id TEXT")
-    conn.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_provider_alert_events_tenant_time
-        ON provider_alert_events(tenant_id, created_at DESC)
-        """
-    )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_provider_alert_events_tenant_time
+            ON provider_alert_events(tenant_id, created_at DESC)
+            """
+        )
+    _mark_tenant_column_ready(conn)
+
+
+def _mark_tenant_column_ready(conn: Any) -> None:
+    try:
+        setattr(conn, _TENANT_COLUMN_READY_FLAG, True)
+    except AttributeError:
+        return
 
 
 def add_watchlist(conn: sqlite3.Connection, ticker_values: Iterable[str], archetype_hint: str | None = None) -> dict[str, Any]:
