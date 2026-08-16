@@ -9,13 +9,13 @@ This is the owner pre-user usage version of VCB-Alt. It is meant for the operato
 Production preview:
 
 ```text
-https://stockscreeningver10.vercel.app/?token=vcb-beta-20260518-4f6b9c2d8a7e4b1f9a0c3d2e5f6a7b8c
+https://stockscreeningver10.vercel.app/?token=<ROTATED-SEE-VERCEL-ENV>
 ```
 
 Release status API:
 
 ```text
-https://stockscreeningver10.vercel.app/api/release-status?token=vcb-beta-20260518-4f6b9c2d8a7e4b1f9a0c3d2e5f6a7b8c
+https://stockscreeningver10.vercel.app/api/release-status?token=<ROTATED-SEE-VERCEL-ENV>
 ```
 
 ## What You Can Test Now

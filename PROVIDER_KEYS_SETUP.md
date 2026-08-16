@@ -30,7 +30,7 @@ Set these in Vercel Project Settings -> Environment Variables -> Production.
 VCB_ALT_DATA_PROVIDER=yahoo
 VCB_ALT_EXTERNAL_API_ENABLED=true
 VCB_ALT_PUBLIC_WEB_ENABLED=true
-VCB_ALT_WEB_ACCESS_TOKEN=vcb-beta-20260518-4f6b9c2d8a7e4b1f9a0c3d2e5f6a7b8c
+VCB_ALT_WEB_ACCESS_TOKEN=<ROTATED-SEE-VERCEL-ENV>
 VCB_ALT_DATABASE_URL=sqlite:////tmp/vcb_alt.db
 VCB_ALT_DATA_DIR=/tmp/vcb_alt_data
 VCB_ALT_LOG_DIR=/tmp/vcb_alt_logs
@@ -111,7 +111,7 @@ VCB_ALT_AI_SUMMARY_CACHE_TTL_HOURS=12
 After redeploy, check:
 
 ```text
-https://stockscreeningver10.vercel.app/api/release-status?token=vcb-beta-20260518-4f6b9c2d8a7e4b1f9a0c3d2e5f6a7b8c
+https://stockscreeningver10.vercel.app/api/release-status?token=<ROTATED-SEE-VERCEL-ENV>
 ```
 
 Expected after full keys are configured:
@@ -195,7 +195,7 @@ http://127.0.0.1:8788/
 Production:
 
 ```powershell
-$token='vcb-beta-20260518-4f6b9c2d8a7e4b1f9a0c3d2e5f6a7b8c'
+$token='<ROTATED-SEE-VERCEL-ENV>'
 $base='https://stockscreeningver10.vercel.app'
 Invoke-WebRequest -UseBasicParsing "$base/api/health"
 Invoke-WebRequest -UseBasicParsing "$base/api/release-status?token=$token"
