@@ -9,22 +9,25 @@ from vcb_alt.config import AppConfig
 from vcb_alt.db import add_watchlist, connect, init_db
 from vcb_alt.performance import benchmark_scoring
 from vcb_alt.web import (
-    APP_CSS,
-    APP_JS,
-    DETAIL_HTML,
-    DETAIL_JS,
-    INDEX_HTML,
     WEB_ASSET_DIR,
     _auth_cookie_headers,
     _client_ip,
-    _dashboard_js,
-    _detail_js,
     _is_authorized,
     _read_json,
     _should_auto_seed_watchlist,
     _web_asset,
     handle_api,
 )
+
+
+def _served(name: str) -> str:
+    """Return exactly what a browser receives for an asset.
+
+    Assertions used to run against the copies embedded in web.py, which the server
+    stopped serving once the assets were extracted - so the UI could break while the
+    tests stayed green.
+    """
+    return _web_asset(name, "")
 
 
 def make_config(root: Path) -> AppConfig:
@@ -132,47 +135,50 @@ class WebTests(unittest.TestCase):
             self.assertEqual(_auth_cookie_headers(_FakeHandler({}), config, "token=1234567890abcdef"), {})
 
     def test_dashboard_exposes_market_wide_discovery_regions(self) -> None:
-        self.assertIn("Market-wide discovery", INDEX_HTML)
-        self.assertIn("Scan full market / latest candidates", INDEX_HTML)
-        self.assertIn("Optional manual research", INDEX_HTML)
-        self.assertIn("Secondary drawer", INDEX_HTML)
-        self.assertIn("never seed candidate output automatically", INDEX_HTML)
-        self.assertIn('id="starter-research-button"', INDEX_HTML)
-        self.assertIn('class="panel watchlist-panel secondary-research-panel"', INDEX_HTML)
-        self.assertIn('id="scan-freshness"', INDEX_HTML)
-        self.assertIn('id="provider-source"', INDEX_HTML)
-        self.assertIn('id="coverage-state"', INDEX_HTML)
-        self.assertIn('id="fail-closed-state"', INDEX_HTML)
-        self.assertIn('id="actionable-body"', INDEX_HTML)
-        self.assertIn('id="excluded-body"', INDEX_HTML)
-        self.assertIn('id="detail-modal"', INDEX_HTML)
-        self.assertIn('href="/risk-disclosure"', INDEX_HTML)
-        self.assertIn("renderSelection", APP_JS)
-        self.assertIn("escapeHtml", APP_JS)
-        self.assertIn("publicLabel", APP_JS)
-        self.assertIn("ensureUserSession", APP_JS)
-        self.assertIn("/api/user/scan", APP_JS)
-        self.assertIn("/api/user/select", APP_JS)
+        index_html = _served("index.html")
+        app_js = _served("app.js")
+        self.assertIn("Market-wide discovery", index_html)
+        self.assertIn("Scan full market / latest candidates", index_html)
+        self.assertIn("Optional manual research", index_html)
+        self.assertIn("Secondary drawer", index_html)
+        self.assertIn("never seed candidate output automatically", index_html)
+        self.assertIn('id="starter-research-button"', index_html)
+        self.assertIn('class="panel watchlist-panel secondary-research-panel"', index_html)
+        self.assertIn('id="scan-freshness"', index_html)
+        self.assertIn('id="provider-source"', index_html)
+        self.assertIn('id="coverage-state"', index_html)
+        self.assertIn('id="fail-closed-state"', index_html)
+        self.assertIn('id="actionable-body"', index_html)
+        self.assertIn('id="excluded-body"', index_html)
+        self.assertIn('id="detail-modal"', index_html)
+        self.assertIn('href="/risk-disclosure"', index_html)
+        self.assertIn("renderSelection", app_js)
+        self.assertIn("escapeHtml", app_js)
+        self.assertIn("publicLabel", app_js)
+        self.assertIn("ensureUserSession", app_js)
+        self.assertIn("/api/user/scan", app_js)
+        self.assertIn("/api/user/select", app_js)
 
     def test_ui_has_responsive_and_language_controls(self) -> None:
-        self.assertIn('data-lang-option="ko"', INDEX_HTML)
-        self.assertIn('data-lang-option="ko"', DETAIL_HTML)
-        self.assertIn("Noto Sans KR", APP_CSS)
-        self.assertIn(".discovery-summary", APP_CSS)
-        self.assertIn(".primary-cta", APP_CSS)
-        self.assertIn(".secondary-research-panel", APP_CSS)
-        self.assertIn(".starter-helper", APP_CSS)
-        self.assertIn(".candidate-data-row", APP_CSS)
-        self.assertIn(".decision-area { order: 1; }", APP_CSS)
-        self.assertIn(".sidebar { display: block; border-right: 0; order: 2; }", APP_CSS)
-        self.assertIn("overflow-wrap: anywhere", APP_CSS)
-        self.assertIn("td::before", APP_CSS)
-        self.assertIn("localStorage.setItem('vcb_lang'", APP_JS)
-        self.assertIn("DETAIL_I18N", DETAIL_JS)
+        app_css = _served("app.css")
+        self.assertIn('data-lang-option="ko"', _served("index.html"))
+        self.assertIn('data-lang-option="ko"', _served("detail.html"))
+        self.assertIn("Noto Sans KR", app_css)
+        self.assertIn(".discovery-summary", app_css)
+        self.assertIn(".primary-cta", app_css)
+        self.assertIn(".secondary-research-panel", app_css)
+        self.assertIn(".starter-helper", app_css)
+        self.assertIn(".candidate-data-row", app_css)
+        self.assertIn(".decision-area { order: 1; }", app_css)
+        self.assertIn(".sidebar { display: block; border-right: 0; order: 2; }", app_css)
+        self.assertIn("overflow-wrap: anywhere", app_css)
+        self.assertIn("td::before", app_css)
+        self.assertIn("localStorage.setItem('vcb_lang'", _served("app.js"))
+        self.assertIn("DETAIL_I18N", _served("detail.js"))
 
     def test_served_javascript_has_valid_korean_i18n_replacements(self) -> None:
-        dashboard_js = _dashboard_js()
-        detail_js = _detail_js()
+        dashboard_js = _served("app.js")
+        detail_js = _served("detail.js")
 
         self.assertIn('접근 권한 필요', dashboard_js)
         self.assertIn('시장 전체 스캔/최신 후보 확인', dashboard_js)
@@ -292,7 +298,7 @@ class WebTests(unittest.TestCase):
                     self.assertIn("tenant-scoped /api/user/*", response.error["detail"])
 
     def test_served_dashboard_uses_tenant_scoped_api_helper_in_saas_mode(self) -> None:
-        dashboard_js = _dashboard_js()
+        dashboard_js = _served("app.js")
 
         self.assertIn("function endpoint(legacyPath, tenantPath)", dashboard_js)
         self.assertIn("state.config && state.config.user_auth_enabled ? tenantPath : legacyPath", dashboard_js)
@@ -341,7 +347,7 @@ class WebTests(unittest.TestCase):
             self.assertTrue(_should_auto_seed_watchlist(legacy_config))
 
     def test_served_js_makes_starter_watchlist_optional(self) -> None:
-        dashboard_js = _dashboard_js()
+        dashboard_js = _served("app.js")
 
         self.assertIn("async function ensureStarterWatchlist() {\n  return;\n}", dashboard_js)
         self.assertIn("async function seedStarterResearchList()", dashboard_js)
