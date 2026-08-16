@@ -63,7 +63,13 @@ RULES: tuple[tuple[str, str, bool], ...] = (
     ("openai key", r"\bsk-[A-Za-z0-9]{20,}\b", False),
     ("aws access key id", r"\bAKIA[0-9A-Z]{16}\b", False),
     ("github token", r"\bgh[pousr]_[A-Za-z0-9]{20,}\b", False),
-    ("postgres url with password", r"postgres(?:ql)?://[^\s:]+:[^\s@]{6,}@", False),
+    # A credential pointing at localhost cannot expose a hosted database, and CI service
+    # containers legitimately carry one in plain text.
+    (
+        "postgres url with password",
+        r"postgres(?:ql)?://[^\s:]+:[^\s@]{6,}@(?!localhost\b|127\.0\.0\.1\b)",
+        False,
+    ),
     ("private key block", r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----", False),
 )
 

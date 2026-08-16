@@ -39,6 +39,8 @@ class SecretScanTests(unittest.TestCase):
             'handle_api(config, "POST", "/api/admin/run-worker", "worker_token=worker-token-123456", {}, {})',
             "https://finnhub.io/api/v1/stock/metric?token=finnhub-token-value",
             "VCB_ALT_DATABASE_URL=postgresql://user:password@host:5432/database?sslmode=require",
+            # CI service container: a localhost database cannot be reached from outside.
+            "VCB_ALT_TEST_DATABASE_URL: postgresql://vcbalt:vcbalt@localhost:5432/vcbalt_test",
         ]
         for line in safe_lines:
             with self.subTest(line=line):
