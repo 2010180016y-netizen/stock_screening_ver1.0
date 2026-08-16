@@ -1,5 +1,49 @@
 # Implementation Plan
 
+## 2026-06-10 Public 1000-User SaaS Blocker Closure Plan
+
+### Current P0/P1/P2 Findings
+
+P0:
+
+- Production all-market discovery is still blocked unless Alpaca/Finnhub/Yahoo live-data credentials and permissions are valid. Live-data-required mode must continue to fail closed instead of returning sample/demo candidates.
+- User-facing scan requests must not execute provider-heavy market scans. They must read a fresh durable `market_scan_snapshot` or enqueue/status only; the protected worker must be the only provider-heavy execution owner.
+- Hosted 1000-user readiness is not proven until the secret-backed CI/operations runner records `load_test_passed=true`, worker completion, snapshot reads, provider call delta, queue depth, provider failure handling, and `db_error_count=0`.
+
+P1:
+
+- Provider alert visibility must distinguish tenant admin from global operator data. Tenant admins should not see cross-tenant/global provider operations unless explicitly granted a global operator role.
+- Production token handling should not accept shared access or worker secrets through query strings.
+- IP rate limiting must only trust `X-Forwarded-For` from configured trusted proxy mode; otherwise use the direct client address.
+- Request JSON parsing needs a production body-size cap and invalid-JSON `400` responses.
+
+P2:
+
+- Dashboard/detail HTML, CSS, JS, and served Korean i18n need an extracted asset path so runtime UI is not dependent on the large embedded fallback constants in `web.py`.
+- Mobile and Korean/English UI smoke checks need an executable test so regressions are caught before deployment.
+
+### Implementation Scope
+
+1. Add config switches for trusted proxy headers, production query-token allowance, request body byte limit, and global operator roles.
+2. Harden `/api/admin/run-worker` to require `POST` in production SaaS and reject query-string worker tokens unless explicitly allowed outside production.
+3. Keep public web query-token cookies only for non-production/operator trial; production SaaS should use session/header auth and must not mint cookies from URL tokens.
+4. Change market-universe tenant scan jobs so they never call `scan_market_universe` inline; they return a queued/pending status if no fresh worker snapshot exists.
+5. Add tenant/global filtering for provider alerts and store optional tenant metadata without exposing secrets.
+6. Extract dashboard/detail/login/legal HTML, CSS, and served JS into `vcb_alt/web_assets/` and load those UTF-8 files first, keeping embedded constants only as a fallback.
+7. Replace broken Korean test expectations with valid UTF-8 checks and add served JS/mobile CSS smoke assertions.
+8. Update QA, release, operations, and changelog with the exact verified and still-blocked gates.
+
+### Verification Plan
+
+- `python -m unittest discover -s tests`
+- `python -m tools.lint`
+- `python -m tools.typecheck`
+- `python -m compileall -q vcb_alt tests tools api`
+- local web health/config/served JS smoke
+- served JS encoding and Korean text check
+- responsive CSS smoke or in-app/browser smoke where tool/runtime is available
+- hosted load-test workflow dispatch if GitHub/runner secrets are accessible; otherwise record the exact secret-backed blocker.
+
 ## 2026-05-26 Market-Universe Algorithm Correction
 
 ### Problem

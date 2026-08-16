@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VCB-Alt Ticker Analysis</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+  <main class="app-shell detail-shell">
+    <header class="topbar" aria-label="Ticker analysis header">
+      <div>
+        <p class="eyebrow" data-i18n="ticker_analysis">Ticker analysis</p>
+        <h1 id="detail-symbol">Loading...</h1>
+      </div>
+      <div class="status-strip">
+        <span id="detail-provider">provider</span>
+        <a class="pill" href="/" data-i18n="dashboard">Dashboard</a>
+        <div class="language-toggle" aria-label="Language">
+          <button type="button" class="secondary lang-button" data-lang-option="en">EN</button>
+          <button type="button" class="secondary lang-button" data-lang-option="ko">KR</button>
+        </div>
+      </div>
+    </header>
+
+    <section id="detail-notice" class="notice" hidden></section>
+
+    <section class="detail-layout" aria-label="Ticker status analysis">
+      <section class="panel">
+        <div class="panel-head">
+          <h2 data-i18n="five_year_chart">Five-year price and volume</h2>
+          <span id="chart-meta">Loading</span>
+        </div>
+        <div class="chart-wrap">
+          <svg id="price-chart" role="img" aria-label="Five-year chart"></svg>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2 data-i18n="current_status">Current status</h2>
+          <span id="review-state">Loading</span>
+        </div>
+        <div id="status-grid" class="detail-grid"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2 data-i18n="ai_summary">Explanation summary</h2>
+          <span id="ai-provider">Loading</span>
+        </div>
+        <div id="ai-summary-body" class="analysis-block"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2 data-i18n="industry_profile">Industry and profile</h2>
+          <span id="profile-source">Loading</span>
+        </div>
+        <div id="profile-body" class="analysis-block"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2 data-i18n="selection_reason">Selection reason</h2>
+          <span id="score-version">Loading</span>
+        </div>
+        <div id="rationale-body" class="analysis-block"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2 data-i18n="expert_consensus">Expert consensus</h2>
+          <span data-i18n="required_review">Required review set</span>
+        </div>
+        <div id="consensus-body" class="analysis-block"></div>
+      </section>
+    </section>
+  </main>
+  <script src="/assets/detail.js"></script>
+</body>
+</html>

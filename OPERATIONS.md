@@ -30,6 +30,58 @@ python -m vcb_alt web --host 0.0.0.0 --port 8765
 
 Do not treat the token gate as public SaaS authentication. Current production status is owner/operator trial only: `public_launch_ready=false` and `NOT_READY_FOR_1000_USER_SAAS`.
 
+## Production SaaS Guardrails
+
+Current production SaaS posture is defensive owner/operator trial, not unrestricted public launch.
+
+Required settings before any internet-facing SaaS trial:
+
+```dotenv
+VCB_ALT_PRODUCTION_SAAS_MODE=true
+VCB_ALT_USER_AUTH_ENABLED=true
+VCB_ALT_RATE_LIMIT_BACKEND=database
+VCB_ALT_SCAN_QUEUE_ENABLED=true
+VCB_ALT_WORKER_CRON_ENABLED=true
+VCB_ALT_ALLOW_QUERY_TOKEN_AUTH=false
+VCB_ALT_MARKET_SCAN_REQUIRES_LIVE_DATA=true
+VCB_ALT_TRUSTED_PROXY_HEADERS=true
+VCB_ALT_MAX_JSON_BODY_BYTES=65536
+```
+
+Auth and worker rules:
+
+- Production SaaS must not use `?token=` access URLs as public authentication.
+- Production SaaS must not accept `?worker_token=` for worker execution.
+- Protected worker execution must use `POST /api/admin/run-worker` with `X-VCB-Worker-Token` or a bearer token from a trusted operations runner.
+- `GET /api/admin/run-worker` is blocked in production SaaS mode.
+- Public users should only hit tenant-scoped user APIs or snapshot-read APIs; provider-heavy market scans are worker-owned.
+
+Market-scan ownership:
+
+- User scan requests read the latest fresh durable `market_scan_snapshot`.
+- If no fresh snapshot exists, user requests enqueue/status a job and return pending state instead of running provider calls inline.
+- Alpaca/Finnhub/Yahoo/SEC/OpenAI/template provider calls must be initiated by the protected worker-owned market snapshot job.
+- With `VCB_ALT_MARKET_SCAN_REQUIRES_LIVE_DATA=true`, sample/demo candidates must not be returned as production research candidates.
+
+Provider-alert visibility:
+
+- Tenant owners/admins can view provider alerts associated with their tenant and global operational alerts needed for their own recovery path.
+- Global operators are users with role `operator` or `global_operator`, or emails listed in `VCB_ALT_GLOBAL_OPERATOR_EMAILS`.
+- Global operators can view all provider-alert events across tenants.
+- Provider-alert logs must not include API keys, secrets, access tokens, or raw authorization headers.
+
+Client IP and request-size rules:
+
+- `X-Forwarded-For` is trusted only when `VCB_ALT_TRUSTED_PROXY_HEADERS=true` and the deployment proxy is known to sanitize that header.
+- Otherwise rate limiting uses the platform/direct client IP.
+- JSON APIs reject invalid JSON, non-object JSON bodies, and request bodies over `VCB_ALT_MAX_JSON_BODY_BYTES`.
+
+Hosted 1000-user gate:
+
+- The required public-launch proof must run from GitHub Actions or another operations runner that can access the protected worker secret.
+- Passing evidence must include `load_test_passed=true`, worker completion, snapshot reads, provider call delta, queue depth, provider failure handling, and `db_error_count=0`.
+- Local health checks or local queue simulations do not satisfy this gate.
+
 ## Performance Check
 
 ```powershell
@@ -107,7 +159,7 @@ Provider-heavy work must run through the worker-owned scan path. The app now app
 Operator endpoints:
 
 - `GET /api/provider-health`: current provider policy, process-local request/failure/budget/circuit state, and fallback policy. This endpoint never returns API keys or secrets.
-- `GET /api/admin/provider-alerts`: durable provider alert events for owner/admin users.
+- `GET /api/admin/provider-alerts`: durable provider alert events. Tenant owners/admins receive tenant-scoped visibility; global operators receive cross-tenant visibility.
 - `GET /api/provider-diagnostics/alpaca`: credential/feed diagnostics for Alpaca, still secret-safe.
 
 Fail-closed rule:
@@ -144,8 +196,9 @@ Runtime behavior:
   - follows the same market snapshot enqueue/read behavior in `market_universe` mode.
 - `GET /api/jobs/market-scan/{id}`
   - returns the global market snapshot job status, attempts, error code, retry time, report, provider metadata, and failures.
-- `POST /api/admin/run-worker?worker_token=<token>`
+- `POST /api/admin/run-worker`
   - processes queued market snapshot jobs before tenant watchlist jobs.
+  - production SaaS requires `X-VCB-Worker-Token` or bearer worker credentials; do not use query-string worker tokens.
 
 Durable storage:
 

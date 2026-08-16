@@ -14,6 +14,7 @@ from vcb_alt.job_queue import (
     _claim_next_job,
     _complete_market_scan_job,
     _decode_job,
+    enqueue_scan_job,
     get_fresh_market_scan_snapshot,
     queue_status,
     recover_stale_jobs,
@@ -327,6 +328,42 @@ class SaasAuthTests(unittest.TestCase):
                 self.assertEqual(response.data["state"], "queued")
                 self.assertNotIn("items", response.data)
 
+    def test_market_universe_tenant_job_does_not_inline_provider_scan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = make_config(Path(tmp))
+            config = AppConfig(
+                **{
+                    **config.__dict__,
+                    "scan_mode": "market_universe",
+                    "scan_queue_enabled": True,
+                    "worker_token": "worker-token-123456",
+                    "worker_cron_enabled": True,
+                    "production_saas_mode": True,
+                }
+            )
+            with connect(config) as conn:
+                init_db(conn)
+                init_saas_db(conn)
+                user = create_user(conn, email="tenant-job@example.com", password="very-secure-password")
+                enqueue_scan_job(conn, user)
+                with patch("vcb_alt.job_queue.scan_market_universe", side_effect=AssertionError("inline scan")):
+                    worker = run_queued_scan_jobs(config, conn, limit=1)
+
+                self.assertEqual(worker["processed"], 1)
+                self.assertEqual(worker["failed"], 0)
+                login = login_user(conn, email="tenant-job@example.com", password="very-secure-password")
+                tenant_job = handle_api(
+                    config,
+                    "GET",
+                    "/api/jobs",
+                    "",
+                    None,
+                    {"authorization": f"Bearer {login['session_token']}"},
+                )
+                self.assertEqual(tenant_job.data["items"][0]["result"]["state"], "pending")
+                status = queue_status(conn, user["tenant_id"])
+                self.assertEqual(status["market_scan_snapshots"]["queued"], 1)
+
     def test_market_scan_worker_retries_then_dead_letters(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config = make_config(Path(tmp))
@@ -402,14 +439,56 @@ class SaasAuthTests(unittest.TestCase):
             self.assertTrue(worker.ok)
             self.assertEqual(worker.data["processed"], 1)
 
+    def test_production_worker_endpoint_rejects_get_and_query_token(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = make_config(Path(tmp))
+            config = AppConfig(
+                **{
+                    **config.__dict__,
+                    "scan_queue_enabled": True,
+                    "worker_token": "worker-token-123456",
+                    "worker_cron_enabled": True,
+                    "production_saas_mode": True,
+                    "allow_query_token_auth": False,
+                }
+            )
+            with connect(config) as conn:
+                init_db(conn)
+                init_saas_db(conn)
+
+            with self.assertRaises(Exception):
+                handle_api(
+                    config,
+                    "GET",
+                    "/api/admin/run-worker",
+                    "",
+                    None,
+                    {"x-vcb-worker-token": "worker-token-123456"},
+                )
+
+            with self.assertRaises(UnauthorizedError):
+                handle_api(config, "POST", "/api/admin/run-worker", "worker_token=worker-token-123456", {}, {})
+
+            header_response = handle_api(
+                config,
+                "POST",
+                "/api/admin/run-worker",
+                "",
+                {},
+                {"x-vcb-worker-token": "worker-token-123456"},
+            )
+            self.assertTrue(header_response.ok)
+
     def test_admin_provider_alerts_are_owner_scoped_and_redacted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config = make_config(Path(tmp))
             with connect(config) as conn:
                 init_db(conn)
                 init_saas_db(conn)
-                create_user(conn, email="alerts@example.com", password="very-secure-password")
+                owner = create_user(conn, email="alerts@example.com", password="very-secure-password")
+                create_user(conn, email="operator@example.com", password="very-secure-password", role="operator")
                 login = login_user(conn, email="alerts@example.com", password="very-secure-password")
+                operator_login = login_user(conn, email="operator@example.com", password="very-secure-password")
                 record_provider_alert(
                     conn,
                     "alpaca",
@@ -418,6 +497,16 @@ class SaasAuthTests(unittest.TestCase):
                     "PROVIDER_AUTH_FAILED",
                     "bad key alpaca-secret-value-1234567890",
                     metadata={"api_key": "alpaca-key-id-1234567890"},
+                    tenant_id=owner["tenant_id"],
+                )
+                record_provider_alert(
+                    conn,
+                    "finnhub",
+                    "fixture",
+                    "warning",
+                    "PROVIDER_RATE_LIMITED",
+                    "global provider budget event",
+                    metadata={"tenant_id": "other-tenant"},
                 )
 
             alerts = handle_api(
@@ -431,9 +520,23 @@ class SaasAuthTests(unittest.TestCase):
 
             rendered = str(alerts.data)
             self.assertTrue(alerts.ok)
+            self.assertEqual(alerts.data["visibility"], "tenant_scoped")
+            self.assertEqual(len(alerts.data["items"]), 1)
             self.assertEqual(alerts.data["items"][0]["provider"], "alpaca")
             self.assertNotIn("alpaca-secret-value-1234567890", rendered)
             self.assertNotIn("alpaca-key-id-1234567890", rendered)
+
+            global_alerts = handle_api(
+                config,
+                "GET",
+                "/api/admin/provider-alerts",
+                "",
+                None,
+                {"authorization": f"Bearer {operator_login['session_token']}"},
+            )
+            self.assertTrue(global_alerts.ok)
+            self.assertEqual(global_alerts.data["visibility"], "global_operator")
+            self.assertEqual({item["provider"] for item in global_alerts.data["items"]}, {"alpaca", "finnhub"})
 
     def test_job_decode_handles_postgres_datetime_and_json_objects(self) -> None:
         decoded = _decode_job(

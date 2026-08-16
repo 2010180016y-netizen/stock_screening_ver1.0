@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from io import BytesIO
 from pathlib import Path
 
 from vcb_alt.config import AppConfig
@@ -13,11 +14,15 @@ from vcb_alt.web import (
     DETAIL_HTML,
     DETAIL_JS,
     INDEX_HTML,
+    WEB_ASSET_DIR,
     _auth_cookie_headers,
+    _client_ip,
     _dashboard_js,
     _detail_js,
     _is_authorized,
+    _read_json,
     _should_auto_seed_watchlist,
+    _web_asset,
     handle_api,
 )
 
@@ -106,6 +111,26 @@ class WebTests(unittest.TestCase):
             self.assertIn("HttpOnly", cookie)
             self.assertIn("Secure", cookie)
 
+    def test_production_saas_disables_query_access_token_cookie(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = AppConfig(
+                database_url="sqlite:///./data/test.db",
+                log_level="INFO",
+                timezone="Asia/Seoul",
+                data_provider="sample",
+                external_api_enabled=False,
+                root_dir=Path(tmp),
+                data_dir=Path(tmp) / "data",
+                log_dir=Path(tmp) / "logs",
+                public_web_enabled=True,
+                web_access_token="1234567890abcdef",
+                production_saas_mode=True,
+                allow_query_token_auth=False,
+            )
+            self.assertFalse(_is_authorized(_FakeHandler({}), config, "token=1234567890abcdef"))
+            self.assertTrue(_is_authorized(_FakeHandler({"authorization": "Bearer 1234567890abcdef"}), config, ""))
+            self.assertEqual(_auth_cookie_headers(_FakeHandler({}), config, "token=1234567890abcdef"), {})
+
     def test_dashboard_exposes_market_wide_discovery_regions(self) -> None:
         self.assertIn("Market-wide discovery", INDEX_HTML)
         self.assertIn("Scan full market / latest candidates", INDEX_HTML)
@@ -149,15 +174,58 @@ class WebTests(unittest.TestCase):
         dashboard_js = _dashboard_js()
         detail_js = _detail_js()
 
-        self.assertIn("접근 권한 필요", dashboard_js)
-        self.assertIn("시장 전체 스캔/최신 후보 확인", dashboard_js)
-        self.assertIn("개 중 ${actionable.length}개 연구 후보", dashboard_js)
-        self.assertIn("AI/기술 메가트렌드", dashboard_js)
-        self.assertIn("실데이터 없으면 후보 미노출", dashboard_js)
-        self.assertIn("종목 분석", detail_js)
-        self.assertIn("최근 5년 가격과 거래량", detail_js)
-        self.assertIn("장중 시세", detail_js)
-        self.assertIn("전문가 검토 항목", detail_js)
+        self.assertIn('접근 권한 필요', dashboard_js)
+        self.assertIn('시장 전체 스캔/최신 후보 확인', dashboard_js)
+        self.assertIn('${items.length}개 중 ${actionable.length}개 연구 후보', dashboard_js)
+        self.assertIn('AI/기술 메가트렌드', dashboard_js)
+        self.assertIn('실데이터 없으면 후보 미노출', dashboard_js)
+        self.assertIn('종목 분석', detail_js)
+        self.assertIn('최근 5년 가격과 거래량', detail_js)
+        self.assertIn('장중 시세', detail_js)
+        self.assertIn('전문가 검토 항목', detail_js)
+        self.assertFalse(_has_mojibake_cjk(dashboard_js))
+        self.assertFalse(_has_mojibake_cjk(detail_js))
+
+    def test_extracted_web_assets_are_utf8_and_used(self) -> None:
+        expected_assets = {
+            "login.html",
+            "index.html",
+            "detail.html",
+            "terms.html",
+            "privacy.html",
+            "risk-disclosure.html",
+            "app.css",
+            "app.js",
+            "detail.js",
+        }
+        for name in expected_assets:
+            with self.subTest(asset=name):
+                self.assertTrue((WEB_ASSET_DIR / name).exists())
+                text = _web_asset(name, "")
+                self.assertTrue(text)
+                self.assertNotIn("\ufffd", text)
+
+        self.assertIn("\uc2dc\uc7a5 \uc804\uccb4 \uc2a4\uce94/\ucd5c\uc2e0 \ud6c4\ubcf4 \ud655\uc778", _web_asset("app.js", ""))
+        self.assertIn("\uc885\ubaa9 \ubd84\uc11d", _web_asset("detail.js", ""))
+        self.assertIn("Market-wide stock discovery", _web_asset("index.html", ""))
+
+    def test_client_ip_trusts_forwarded_for_only_when_configured(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = make_config(Path(tmp))
+            handler = _FakeHandler({"x-forwarded-for": "198.51.100.7, 10.0.0.1"}, client_ip="203.0.113.9")
+            self.assertEqual(_client_ip(handler, base), "203.0.113.9")
+            trusted = AppConfig(**{**base.__dict__, "trusted_proxy_headers": True})
+            self.assertEqual(_client_ip(handler, trusted), "198.51.100.7")
+
+    def test_read_json_rejects_invalid_or_oversized_body(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = AppConfig(**{**make_config(Path(tmp)).__dict__, "max_json_body_bytes": 8})
+            with self.assertRaises(Exception):
+                _read_json(_JsonHandler(b"not-json"), config)
+            with self.assertRaises(Exception):
+                _read_json(_JsonHandler(b'{"long": true}'), config)
+            valid = _read_json(_JsonHandler(b'{"a":1}'), AppConfig(**{**config.__dict__, "max_json_body_bytes": 32}))
+            self.assertEqual(valid, {"a": 1})
 
     def test_watchlist_api_marks_manual_research_as_secondary_in_market_mode(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -299,10 +367,27 @@ class WebTests(unittest.TestCase):
             self.assertIn("not a trading instruction", " ".join(analysis.data["ai_summary"]["limitations"]))
 
 
+def _has_mojibake_cjk(value: str) -> bool:
+    if "\ufffd" in value:
+        return True
+    return any(
+        (0x3400 <= ord(ch) <= 0x4DBF)
+        or (0x4E00 <= ord(ch) <= 0x9FFF)
+        or (0xF900 <= ord(ch) <= 0xFAFF)
+        for ch in value
+    )
+
+
 class _FakeHandler:
-    def __init__(self, headers: dict[str, str]) -> None:
+    def __init__(self, headers: dict[str, str], client_ip: str = "127.0.0.1") -> None:
         self.headers = headers
-        self.client_address = ("127.0.0.1", 12345)
+        self.client_address = (client_ip, 12345)
+
+
+class _JsonHandler:
+    def __init__(self, body: bytes) -> None:
+        self.headers = {"content-length": str(len(body))}
+        self.rfile = BytesIO(body)
 
 
 if __name__ == "__main__":

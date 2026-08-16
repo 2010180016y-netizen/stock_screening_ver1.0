@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VCB-Alt Access</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+  <main class="login-shell">
+    <section class="login-panel" aria-label="Access required">
+        <p class="eyebrow">VCB-Alt Screening Desk</p>
+        <h1 data-i18n="access_required">Access required</h1>
+        <p class="muted" data-i18n="access_help">Enter the deployment access token configured by the operator.</p>
+        <form method="get" action="/">
+        <label for="token" data-i18n="access_token">Access token</label>
+        <input id="token" name="token" type="password" autocomplete="current-password" required>
+        <button type="submit" data-i18n="open_dashboard">Open dashboard</button>
+      </form>
+    </section>
+  </main>
+</body>
+</html>

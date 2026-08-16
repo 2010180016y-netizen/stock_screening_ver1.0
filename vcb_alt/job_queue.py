@@ -193,6 +193,7 @@ def _record_provider_alert_if_needed(
         alert["message"],
         recovery=alert.get("recovery", ""),
         metadata=alert.get("metadata", {}),
+        tenant_id=(metadata or {}).get("tenant_id"),
     )
 
 
@@ -232,38 +233,11 @@ def enqueue_or_get_market_scan_snapshot(config: Any, conn: Any, user: dict[str, 
     if active is not None:
         return {"state": "pending", "status": active["status"], "job": active}
 
-    now = utc_now()
-    job_id = f"market_{uuid.uuid4().hex}"
     try:
-        conn.execute(
-            """
-            INSERT INTO market_scan_snapshots (
-                id, scan_key, status, requested_by, report_json, selected_json,
-                provider_metadata_json, failures_json, error_code, message,
-                attempts, created_at, started_at, completed_at, expires_at, next_attempt_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                job_id,
-                MARKET_SCAN_KEY,
-                "queued",
-                str(user.get("email") or user.get("id") or "authenticated-user"),
-                None,
-                None,
-                None,
-                None,
-                None,
-                "Queued market-universe snapshot refresh.",
-                0,
-                now,
-                None,
-                None,
-                None,
-                now,
-            ),
+        job = _enqueue_market_scan_snapshot_for_worker(
+            conn,
+            requested_by=str(user.get("email") or user.get("id") or "authenticated-user"),
         )
-        conn.commit()
     except Exception:
         conn.rollback()
         active = get_active_market_scan_job(conn)
@@ -273,13 +247,48 @@ def enqueue_or_get_market_scan_snapshot(config: Any, conn: Any, user: dict[str, 
     return {
         "state": "queued",
         "status": "queued",
-        "job": {
-            "id": job_id,
-            "status": "queued",
-            "scan_key": MARKET_SCAN_KEY,
-            "created_at": now,
-            "message": "Queued market-universe snapshot refresh.",
-        },
+        "job": job,
+    }
+
+
+def _enqueue_market_scan_snapshot_for_worker(conn: Any, *, requested_by: str) -> dict[str, Any]:
+    now = utc_now()
+    job_id = f"market_{uuid.uuid4().hex}"
+    conn.execute(
+        """
+        INSERT INTO market_scan_snapshots (
+            id, scan_key, status, requested_by, report_json, selected_json,
+            provider_metadata_json, failures_json, error_code, message,
+            attempts, created_at, started_at, completed_at, expires_at, next_attempt_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            job_id,
+            MARKET_SCAN_KEY,
+            "queued",
+            requested_by,
+            None,
+            None,
+            None,
+            None,
+            None,
+            "Queued market-universe snapshot refresh.",
+            0,
+            now,
+            None,
+            None,
+            None,
+            now,
+        ),
+    )
+    conn.commit()
+    return {
+        "id": job_id,
+        "status": "queued",
+        "scan_key": MARKET_SCAN_KEY,
+        "created_at": now,
+        "message": "Queued market-universe snapshot refresh.",
     }
 
 
@@ -525,10 +534,18 @@ def _run_tenant_scan(config: Any, conn: Any, job: dict[str, Any]) -> dict[str, A
         if fresh is not None:
             persist_market_snapshot_for_user(conn, user, fresh["report"])
             return fresh["report"]
-        report = scan_market_universe(config).to_api_dict()
-        _complete_market_scan_job(conn, f"market_inline_{uuid.uuid4().hex}", report, insert_if_missing=True)
-        persist_market_snapshot_for_user(conn, user, report)
-        return report
+        active = get_active_market_scan_job(conn)
+        if active is None:
+            active = _enqueue_market_scan_snapshot_for_worker(
+                conn,
+                requested_by=f"tenant_job:{job['tenant_id']}:{job['user_id']}",
+            )
+        return {
+            "state": "pending",
+            "status": active["status"],
+            "job": active,
+            "message": "Tenant job is waiting for a worker-owned market-universe snapshot.",
+        }
 
     items = list_user_watchlist(conn, user)
     evaluations: list[dict[str, Any]] = []

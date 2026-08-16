@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.3.16-production-saas-blocker-hardening - 2026-06-10
+
+### Changed
+
+- Disabled query-string access-token authentication and query-string worker-token execution in production SaaS mode.
+- Hardened protected worker execution so production SaaS requires `POST /api/admin/run-worker` and header/bearer worker credentials.
+- Changed tenant market-universe scan jobs so they read a fresh durable worker-owned market snapshot or return pending/enqueued state instead of executing provider-heavy scans inline.
+- Added trusted-proxy-only `X-Forwarded-For` handling and JSON request body size/parse validation.
+- Added tenant-aware provider-alert persistence and separated tenant-scoped provider alert views from global operator alert views.
+- Added production SaaS environment knobs for query-token auth, trusted proxy headers, JSON body limit, and global operator emails.
+- Extracted dashboard/detail/login/legal HTML, CSS, and served JS into `vcb_alt/web_assets/`, with `web.py` loading those UTF-8 files first and keeping embedded constants as fallback only.
+- Replaced served dashboard/detail Korean i18n output with valid UTF-8 strings for the market-wide discovery UI and ticker detail pages.
+- Updated `IMPLEMENTATION_PLAN.md`, `QA_REPORT.md`, `RELEASE_DECISION.md`, and `OPERATIONS.md` with the current public 1000-user blocker status.
+
+### Verified
+
+- Targeted web/SaaS tests passed: `39` tests.
+- Full unit suite passed: `82` tests.
+- Lint passed: `lint ok (44 files)`.
+- Typecheck passed: `type hints ok (428 objects)`.
+- Compile smoke passed for `vcb_alt`, `tests`, `tools`, and `api`.
+- Local web smoke passed for health/config/root/dashboard JS/detail JS.
+- Browser smoke passed on desktop and mobile viewports with no horizontal overflow and valid Korean CTA text.
+- Hosted 1000-user workflow dispatch was not executed from this workstation because `gh` is unavailable; public-launch status remains `NOT_READY_FOR_1000_USER_SAAS`.
+
 ## 1.3.15-ci-hosted-load-gate-workflow - 2026-06-04
 
 ### Added

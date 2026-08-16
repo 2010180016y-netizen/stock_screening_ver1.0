@@ -111,6 +111,7 @@ ON failed_jobs(created_at DESC);
 
 CREATE TABLE IF NOT EXISTS provider_alert_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT,
     provider TEXT NOT NULL,
     event_type TEXT NOT NULL,
     severity TEXT NOT NULL,
@@ -127,6 +128,9 @@ ON provider_alert_events(created_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_provider_alert_events_provider_time
 ON provider_alert_events(provider, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_provider_alert_events_tenant_time
+ON provider_alert_events(tenant_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS rate_limit_events (
     bucket_key TEXT NOT NULL,
@@ -237,6 +241,7 @@ ON failed_jobs(created_at DESC);
 
 CREATE TABLE IF NOT EXISTS provider_alert_events (
     id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT,
     provider TEXT NOT NULL,
     event_type TEXT NOT NULL,
     severity TEXT NOT NULL,
@@ -253,6 +258,9 @@ ON provider_alert_events(created_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_provider_alert_events_provider_time
 ON provider_alert_events(provider, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_provider_alert_events_tenant_time
+ON provider_alert_events(tenant_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS rate_limit_events (
     bucket_key TEXT NOT NULL,
@@ -331,6 +339,7 @@ def connect(config: AppConfig) -> Any:
 
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(POSTGRES_SCHEMA_SQL if _is_postgres(conn) else SCHEMA_SQL)
+    _ensure_provider_alert_tenant_column(conn)
     conn.commit()
 
 
@@ -342,12 +351,39 @@ def ensure_initialized(conn: sqlite3.Connection) -> None:
         ).fetchone()
         if row is None:
             raise NotFoundError("Database is not initialized. Run: python -m vcb_alt init-db")
+        _ensure_provider_alert_tenant_column(conn)
         return
     row = conn.execute(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'watchlist'"
     ).fetchone()
     if row is None:
         raise NotFoundError("Database is not initialized. Run: python -m vcb_alt init-db")
+    _ensure_provider_alert_tenant_column(conn)
+
+
+def _ensure_provider_alert_tenant_column(conn: sqlite3.Connection) -> None:
+    if _is_postgres(conn):
+        conn.execute("ALTER TABLE provider_alert_events ADD COLUMN IF NOT EXISTS tenant_id TEXT")
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_provider_alert_events_tenant_time
+            ON provider_alert_events(tenant_id, created_at DESC)
+            """
+        )
+        return
+    columns = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA table_info(provider_alert_events)").fetchall()
+        if "name" in row.keys()
+    }
+    if "tenant_id" not in columns:
+        conn.execute("ALTER TABLE provider_alert_events ADD COLUMN tenant_id TEXT")
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_provider_alert_events_tenant_time
+        ON provider_alert_events(tenant_id, created_at DESC)
+        """
+    )
 
 
 def add_watchlist(conn: sqlite3.Connection, ticker_values: Iterable[str], archetype_hint: str | None = None) -> dict[str, Any]:
@@ -483,16 +519,18 @@ def record_provider_alert(
     *,
     recovery: str = "",
     metadata: dict[str, Any] | None = None,
+    tenant_id: str | None = None,
 ) -> None:
     ensure_initialized(conn)
     conn.execute(
         """
         INSERT INTO provider_alert_events (
-            provider, event_type, severity, code, message, recovery, metadata_json, created_at
+            tenant_id, provider, event_type, severity, code, message, recovery, metadata_json, created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
+            tenant_id,
             str(provider),
             str(event_type),
             str(severity),
@@ -534,17 +572,34 @@ def recent_failures(conn: sqlite3.Connection, limit: int = 20) -> list[dict[str,
     return [_row_with_json(row) for row in rows]
 
 
-def recent_provider_alerts(conn: sqlite3.Connection, limit: int = 20) -> list[dict[str, Any]]:
+def recent_provider_alerts(
+    conn: sqlite3.Connection,
+    limit: int = 20,
+    *,
+    tenant_id: str | None = None,
+    include_global: bool = True,
+) -> list[dict[str, Any]]:
     ensure_initialized(conn)
+    where = ""
+    params: tuple[Any, ...]
+    if tenant_id is not None:
+        where = "WHERE tenant_id = ?"
+        params = (tenant_id, limit)
+    elif not include_global:
+        where = "WHERE tenant_id IS NOT NULL"
+        params = (limit,)
+    else:
+        params = (limit,)
     rows = conn.execute(
-        """
-        SELECT id, provider, event_type, severity, code, message, recovery,
+        f"""
+        SELECT id, tenant_id, provider, event_type, severity, code, message, recovery,
                metadata_json, resolved, created_at
         FROM provider_alert_events
+        {where}
         ORDER BY id DESC
         LIMIT ?
         """,
-        (limit,),
+        params,
     ).fetchall()
     return [_row_with_json(row) for row in rows]
 

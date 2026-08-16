@@ -94,12 +94,17 @@ VCB_ALT_MARKET_SCAN_REQUIRES_LIVE_DATA=false
 VCB_ALT_PUBLIC_WEB_ENABLED=false
 VCB_ALT_WEB_ACCESS_TOKEN=replace-with-at-least-16-random-characters
 VCB_ALT_AUTO_SEED_SAMPLE=true
+VCB_ALT_ALLOW_QUERY_TOKEN_AUTH=true
+VCB_ALT_TRUSTED_PROXY_HEADERS=false
+VCB_ALT_MAX_JSON_BODY_BYTES=65536
+VCB_ALT_GLOBAL_OPERATOR_EMAILS=
 ```
 
 `sample` is the safe offline default. `manual` reads `data/snapshots.csv`. `yahoo` fetches end-of-day chart data and requires `VCB_ALT_EXTERNAL_API_ENABLED=true`. `stooq` is also supported, but some Stooq downloads require an API key/captcha flow.
 `VCB_ALT_SCAN_MODE=market_universe` is the intended product mode. It scans the configured universe instead of only user-entered watchlist symbols. Set `VCB_ALT_MARKET_SCAN_REQUIRES_LIVE_DATA=true` in production so the app fails closed when live Alpaca snapshots are unavailable.
 `VCB_ALT_AUTO_SEED_SAMPLE=true` only seeds the legacy/local watchlist flow. It is ignored for `market_universe` and production SaaS core flows; starter tickers appear only as an optional manual research helper.
 Provider-heavy paths use timeout, retry, quota-budget, and circuit-breaker guards. Operators can inspect `/api/provider-health` and `/api/admin/provider-alerts` without exposing API keys.
+For production SaaS, set `VCB_ALT_ALLOW_QUERY_TOKEN_AUTH=false`; production mode forces query-token auth off so `?token=` and `?worker_token=` cannot become public access paths. Set `VCB_ALT_TRUSTED_PROXY_HEADERS=true` only behind a trusted proxy that sanitizes `X-Forwarded-For`. Use `VCB_ALT_GLOBAL_OPERATOR_EMAILS` or `operator`/`global_operator` roles for cross-tenant provider alert visibility.
 
 ## Usage
 

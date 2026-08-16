@@ -2,7 +2,64 @@
 
 QA date: 2026-05-18 KST
 
-Latest verification update: 2026-06-04 KST
+Latest verification update: 2026-06-10 KST
+
+## Public 1000-User SaaS Blocker Closure Pass - 2026-06-10 KST
+
+Scope:
+
+- Rechecked the codebase against the current blocker list for public 1000-user SaaS launch.
+- Hardened production SaaS auth boundaries so query-string access tokens and query-string worker tokens are disabled in production mode.
+- Reworked tenant market-universe scan jobs so user-triggered jobs read a fresh durable worker-owned market snapshot or return pending/enqueued state; provider-heavy `scan_market_universe` calls remain worker-owned.
+- Added tenant/global provider-alert separation and global-operator visibility.
+- Added trusted-proxy-only `X-Forwarded-For` handling and JSON body-size/invalid-JSON guards.
+- Extracted dashboard/detail/login/legal HTML, CSS, and served JS into `vcb_alt/web_assets/` and made `web.py` load those UTF-8 files first, with embedded constants retained only as fallback.
+- Replaced served dashboard/detail JavaScript Korean i18n output with valid UTF-8 strings and added regression coverage for broken served text.
+- Ran local API, served asset, desktop viewport, and mobile viewport smoke checks.
+
+Commands run:
+
+```powershell
+python -m unittest tests.test_web tests.test_saas_auth
+python -m unittest discover -s tests
+python -m tools.lint
+python -m tools.typecheck
+python -m compileall -q vcb_alt tests tools api
+$env:VCB_ALT_SCAN_MODE='market_universe'; $env:VCB_ALT_DATA_PROVIDER='sample'; $env:VCB_ALT_EXTERNAL_API_ENABLED='false'; $env:VCB_ALT_MARKET_SCAN_REQUIRES_LIVE_DATA='false'; $env:VCB_ALT_PUBLIC_WEB_ENABLED='false'; $env:VCB_ALT_DATABASE_URL='sqlite:///./data/local_smoke_8792.db'; python -m vcb_alt web --host 127.0.0.1 --port 8792
+Invoke-WebRequest http://127.0.0.1:8792/api/health
+Invoke-WebRequest http://127.0.0.1:8792/api/config
+Invoke-WebRequest http://127.0.0.1:8792/assets/app.js
+Invoke-WebRequest http://127.0.0.1:8792/assets/detail.js
+Invoke-WebRequest http://127.0.0.1:8792/
+gh --version
+```
+
+Results:
+
+- Targeted web/SaaS tests passed: `39` tests.
+- Full unit suite passed: `82` tests.
+- Lint passed: `lint ok (44 files)`.
+- Typecheck passed: `type hints ok (428 objects)`.
+- Compile smoke passed for `vcb_alt`, `tests`, `tools`, and `api`.
+- Local web smoke passed for `/api/health`, `/api/config`, `/assets/app.js`, `/assets/detail.js`, and `/`.
+- Served JS encoding check passed: dashboard/detail assets contained valid Korean strings and no replacement-character mojibake.
+- Extracted web asset test passed for `login.html`, `index.html`, `detail.html`, legal pages, `app.css`, `app.js`, and `detail.js`.
+- Desktop browser smoke passed at `1280px`: no horizontal overflow, Korean toggle present, primary CTA visible, and primary CTA text translated to `시장 전체 스캔/최신 후보 확인`.
+- Mobile browser smoke passed at `390px`: no horizontal overflow, no escaping text boxes detected, Korean toggle worked, and primary CTA stayed visible.
+- Local smoke server was stopped after verification.
+
+Hosted load-test gate:
+
+- GitHub Actions hosted load-test workflow could not be dispatched from this workstation because `gh` is not installed.
+- The available GitHub connector tools exposed workflow read/rerun helpers but no new manual workflow-dispatch tool for this run.
+- This local run therefore does not prove the required hosted gate: worker trigger, queue completion, snapshot read, provider call delta, queue depth, provider failure handling, `db_error_count=0`, and `load_test_passed=true`.
+- Required next execution remains the secret-backed CI/operations runner with `VCB_ALT_WORKER_TOKEN` or `CRON_SECRET` available as a protected secret.
+
+Release conclusion:
+
+- Current state remains `public_launch_ready=false`.
+- Current release decision remains `NOT_READY_FOR_1000_USER_SAAS`.
+- The code path is safer for owner/operator trial, but public 1000-user SaaS launch remains blocked until the hosted worker-completion load-test gate and live-provider production scan evidence pass.
 
 ## Hosted Scan-Heavy 1000-User Load Test Recheck - 2026-06-04 KST
 

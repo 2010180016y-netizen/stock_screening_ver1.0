@@ -2,13 +2,15 @@
 
 Decision date: 2026-05-18 KST
 
-Latest update: 2026-06-04 KST
+Latest update: 2026-06-10 KST
 
 Latest deployment update: 2026-06-04 KST
 
 ## 1. Final State
 
 NOT_READY_FOR_PUBLIC_1000_USER_SAAS.
+
+2026-06-10 blocker-closure update: production SaaS hardening now disables query-string access tokens and query-string worker tokens in production mode, requires `POST` for protected worker execution, trusts `X-Forwarded-For` only when trusted proxy mode is explicitly enabled, applies JSON request size/parse guards, separates tenant-scoped provider-alert visibility from global operator visibility, and prevents tenant market-universe jobs from executing provider-heavy scans inline. User-facing scan requests now rely on fresh durable worker-owned market snapshots or return pending/enqueued status. Dashboard/detail/login/legal HTML, CSS, and served JS are extracted into `vcb_alt/web_assets/`; `web.py` loads those UTF-8 files first and keeps embedded constants only as fallback. Served dashboard/detail JavaScript was verified with valid UTF-8 Korean strings, and desktop/mobile browser smoke passed without horizontal overflow. Local verification passed full unit tests, lint, typecheck, compile smoke, served JS checks, extracted asset checks, and local web smoke. This improves owner/operator-trial safety, but it is not public-launch approval: the hosted secret-backed 1000-user worker-completion gate was not run from this workstation because `gh` is unavailable, and live Alpaca/Finnhub/Yahoo production market-universe evidence still must be proven. Current status remains `public_launch_ready=false` and `NOT_READY_FOR_1000_USER_SAAS`.
 
 2026-06-04 hosted 1000-user load-test recheck: `tools/host_queue_load_test.py` now records worker-protection preflight, auth register/login/delete preflight, provider-failure coverage status, provider budget guard state, and cleanup behavior. A real Vercel production preflight wrote `data/hosted_scan_heavy_1000_20260604.json`: health/provider/release/auth/worker-protection requests executed with `6` successful `2xx` responses and `1` expected worker-protection `401`; p50 latency was `398.76ms`, p95 `649.85ms`, and p99 `649.85ms`. The protected worker endpoint correctly rejected unauthenticated trigger attempts, and auth register/login/delete cleanup succeeded. However, Vercel env pull exposed worker-related keys only as zero-length values to this local runner, so the provider budget guard blocked the worker-trigger phase before creating 1000 load users or consuming provider-heavy scan budget. Registration/enqueue load, worker completion, job polling, snapshot reads, provider call deltas, queue depth, and hosted provider-alert/dead-letter handling were therefore not proven. This is not a passing hosted 1000-user completion test, and the release remains `NOT_READY_FOR_1000_USER_SAAS`.
 

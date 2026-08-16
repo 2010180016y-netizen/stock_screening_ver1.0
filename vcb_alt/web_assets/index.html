@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VCB-Alt Market Discovery</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar" aria-label="Application header">
+      <div>
+        <p class="eyebrow">VCB-Alt Market Discovery</p>
+        <h1 data-i18n="dashboard_title">Market-wide stock discovery</h1>
+      </div>
+      <div class="status-strip">
+        <span id="provider">provider</span>
+        <span id="runtime">ready</span>
+        <div class="language-toggle" aria-label="Language">
+          <button type="button" class="secondary lang-button" data-lang-option="en">EN</button>
+          <button type="button" class="secondary lang-button" data-lang-option="ko">KR</button>
+        </div>
+      </div>
+    </header>
+
+    <section class="metadata-bar" aria-label="Data status">
+      <span id="data-as-of" data-i18n="data_not_loaded">Data as of: not loaded</span>
+      <span id="data-source" data-i18n="provider_not_loaded">Provider: not loaded</span>
+      <span id="ops-state" class="status-dot good" data-i18n="ops_checking">Operational status: checking</span>
+    </section>
+
+    <section class="discovery-hero" aria-label="Market-wide discovery">
+      <div class="hero-copy">
+        <p class="eyebrow" data-i18n="discovery_primary_label">Market-wide discovery</p>
+        <h2 data-i18n="discovery_primary_title">Find the latest research candidates across the market</h2>
+        <p data-i18n="discovery_primary_help">
+          The worker-owned market scan reads the latest fresh snapshot or queues one durable scan job.
+        </p>
+      </div>
+      <div class="hero-actions">
+        <button id="scan-button" class="primary-cta" type="button" data-i18n="run_scan">
+          Scan full market / latest candidates
+        </button>
+        <button id="select-button" class="secondary" type="button" data-i18n="select_final">
+          Rebuild selected set
+        </button>
+        <button id="refresh-button" class="secondary" type="button" data-i18n="refresh">Refresh status</button>
+      </div>
+    </section>
+
+    <section class="discovery-summary" aria-label="Market scan status">
+      <article class="summary-card">
+        <span data-i18n="scan_freshness">Scan freshness</span>
+        <strong id="scan-freshness" data-i18n="no_snapshot_yet">No snapshot yet</strong>
+      </article>
+      <article class="summary-card">
+        <span data-i18n="provider_source">Provider source</span>
+        <strong id="provider-source">-</strong>
+      </article>
+      <article class="summary-card">
+        <span data-i18n="data_coverage">Data coverage</span>
+        <strong id="coverage-state" data-i18n="coverage_pending">Pending</strong>
+      </article>
+      <article class="summary-card">
+        <span data-i18n="fail_closed">Fail-closed state</span>
+        <strong id="fail-closed-state">-</strong>
+      </article>
+    </section>
+
+    <section id="notice" class="notice" hidden></section>
+
+    <div class="workspace">
+      <aside class="sidebar" aria-label="Secondary research and operations">
+        <details class="panel watchlist-panel secondary-research-panel">
+          <summary class="panel-head">
+            <span>
+              <span data-i18n="watchlist">Optional manual research</span>
+              <small data-i18n="watchlist_drawer_label">Secondary drawer</small>
+            </span>
+            <span id="watchlist-count">0</span>
+          </summary>
+          <p class="panel-note" data-i18n="watchlist_help">
+            Optional watchlist notes are separate from the market-wide discovery result and never seed candidate output automatically.
+          </p>
+          <button id="starter-research-button" class="secondary starter-helper" type="button" data-i18n="starter_research">
+            Add optional starter research list
+          </button>
+          <form id="add-form" class="ticker-form">
+            <label for="ticker-input" data-i18n="add_tickers">Add research tickers</label>
+            <input id="ticker-input" name="tickers" autocomplete="off" placeholder="PLTR MSTR VST">
+            <button type="submit" class="secondary" data-i18n="add">Add</button>
+          </form>
+          <div id="watchlist" class="watchlist"></div>
+        </details>
+
+        <section class="panel ops-panel">
+          <div class="panel-head">
+            <h2 data-i18n="operations">Operations</h2>
+            <span id="failure-count">0 failures</span>
+          </div>
+          <div id="readiness" class="readiness"></div>
+          <div id="failures" class="ops-list"></div>
+        </section>
+      </aside>
+
+      <section class="decision-area">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow" data-i18n="decision_first">Market-wide candidate review</p>
+            <h2>
+              <span data-i18n="entry_candidates">Latest research candidates</span>
+              <span data-i18n="final_selection">Selected research set</span>
+            </h2>
+          </div>
+          <span id="selection-meta" class="pill">Not run</span>
+        </div>
+
+        <section id="selection" class="candidate-grid" aria-label="Final selection">
+          <div class="empty-state" data-i18n="run_selection_empty">Scan the market to see the latest selected research set.</div>
+        </section>
+
+        <section class="panel scan-panel">
+          <div class="panel-head">
+            <h2 data-i18n="actionable_setups">Research candidates</h2>
+            <span id="actionable-meta">Not run</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th data-i18n="ticker">Ticker</th>
+                  <th data-i18n="archetype">Archetype</th>
+                  <th data-i18n="score">Score</th>
+                  <th data-i18n="status">Status</th>
+                  <th data-i18n="allocation">Allocation</th>
+                  <th data-i18n="data">Data</th>
+                </tr>
+              </thead>
+              <tbody id="actionable-body">
+                <tr><td colspan="6" class="empty-state" data-i18n="run_scan_empty">Run scan to populate candidates.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel scan-panel muted-panel">
+          <div class="panel-head">
+            <h2 data-i18n="monitor_excluded">Monitor or excluded</h2>
+            <span id="excluded-meta">Not run</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th data-i18n="ticker">Ticker</th>
+                  <th data-i18n="archetype">Archetype</th>
+                  <th data-i18n="score">Score</th>
+                  <th data-i18n="status">Status</th>
+                  <th data-i18n="reason">Reason</th>
+                  <th data-i18n="data">Data</th>
+                </tr>
+              </thead>
+              <tbody id="excluded-body">
+                <tr>
+                  <td colspan="6" class="empty-state" data-i18n="lower_confidence_empty">
+                    Lower-confidence names appear here after scanning.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+    </div>
+    <footer class="legal-footer" aria-label="Legal and disclosure links">
+      <span data-i18n="legal_notice">Decision support only. No automatic trading.</span>
+      <a href="/risk-disclosure" data-i18n="risk_disclosure">Risk disclosure</a>
+      <a href="/privacy" data-i18n="privacy">Privacy</a>
+      <a href="/terms" data-i18n="terms">Terms</a>
+    </footer>
+  </main>
+  <div id="detail-modal" class="modal" hidden>
+    <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="detail-title">
+      <button id="detail-close" class="icon-button" type="button" aria-label="Close detail">x</button>
+      <div id="detail-content"></div>
+    </section>
+  </div>
+  <script src="/assets/app.js"></script>
+</body>
+</html>

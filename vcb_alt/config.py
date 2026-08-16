@@ -60,6 +60,10 @@ class AppConfig:
     worker_token: str = ""
     worker_cron_enabled: bool = False
     production_saas_mode: bool = False
+    trusted_proxy_headers: bool = False
+    allow_query_token_auth: bool = True
+    max_json_body_bytes: int = 65536
+    global_operator_emails: tuple[str, ...] = ()
     scan_mode: str = "watchlist"
     market_universe_provider: str = "auto"
     market_universe_max_symbols: int = 5000
@@ -218,6 +222,14 @@ def load_config(root_dir: Path | None = None) -> AppConfig:
     worker_token = get("WORKER_TOKEN", "")
     worker_cron_enabled = _truthy(get("WORKER_CRON_ENABLED", "false"))
     production_saas_mode = _truthy(get("PRODUCTION_SAAS_MODE", "false"))
+    trusted_proxy_headers = _truthy(get("TRUSTED_PROXY_HEADERS", "false"))
+    allow_query_token_auth = _truthy(get("ALLOW_QUERY_TOKEN_AUTH", "true"))
+    if production_saas_mode:
+        allow_query_token_auth = False
+    max_json_body_bytes = _parse_positive_int(get("MAX_JSON_BODY_BYTES", "65536"), "MAX_JSON_BODY_BYTES")
+    global_operator_emails = tuple(
+        sorted({item.strip().lower() for item in get("GLOBAL_OPERATOR_EMAILS", "").split(",") if item.strip()})
+    )
     scan_mode = get("SCAN_MODE", "market_universe").lower()
     if scan_mode not in {"market_universe", "watchlist"}:
         raise ValidationError("SCAN_MODE must be one of: market_universe, watchlist.")
@@ -302,6 +314,10 @@ def load_config(root_dir: Path | None = None) -> AppConfig:
         worker_token=worker_token,
         worker_cron_enabled=worker_cron_enabled,
         production_saas_mode=production_saas_mode,
+        trusted_proxy_headers=trusted_proxy_headers,
+        allow_query_token_auth=allow_query_token_auth,
+        max_json_body_bytes=max_json_body_bytes,
+        global_operator_emails=global_operator_emails,
         scan_mode=scan_mode,
         market_universe_provider=market_universe_provider,
         market_universe_max_symbols=market_universe_max_symbols,
@@ -338,6 +354,10 @@ def doctor_report(config: AppConfig) -> dict[str, Any]:
         "worker_configured": len(config.worker_token) >= 16,
         "worker_cron_enabled": config.worker_cron_enabled,
         "production_saas_mode": config.production_saas_mode,
+        "trusted_proxy_headers": config.trusted_proxy_headers,
+        "allow_query_token_auth": config.allow_query_token_auth,
+        "max_json_body_bytes": config.max_json_body_bytes,
+        "global_operator_configured": bool(config.global_operator_emails),
         "market_data_cache_ttl_hours": config.market_data_cache_ttl_hours,
         "provider_retry_attempts": config.provider_retry_attempts,
         "provider_retry_backoff_seconds": config.provider_retry_backoff_seconds,
