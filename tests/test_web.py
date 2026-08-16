@@ -27,7 +27,7 @@ def _served(name: str) -> str:
     stopped serving once the assets were extracted - so the UI could break while the
     tests stayed green.
     """
-    return _web_asset(name, "")
+    return _web_asset(name)
 
 
 def make_config(root: Path) -> AppConfig:
@@ -207,13 +207,13 @@ class WebTests(unittest.TestCase):
         for name in expected_assets:
             with self.subTest(asset=name):
                 self.assertTrue((WEB_ASSET_DIR / name).exists())
-                text = _web_asset(name, "")
+                text = _web_asset(name)
                 self.assertTrue(text)
                 self.assertNotIn("\ufffd", text)
 
-        self.assertIn("\uc2dc\uc7a5 \uc804\uccb4 \uc2a4\uce94/\ucd5c\uc2e0 \ud6c4\ubcf4 \ud655\uc778", _web_asset("app.js", ""))
-        self.assertIn("\uc885\ubaa9 \ubd84\uc11d", _web_asset("detail.js", ""))
-        self.assertIn("Market-wide stock discovery", _web_asset("index.html", ""))
+        self.assertIn("\uc2dc\uc7a5 \uc804\uccb4 \uc2a4\uce94/\ucd5c\uc2e0 \ud6c4\ubcf4 \ud655\uc778", _web_asset("app.js"))
+        self.assertIn("\uc885\ubaa9 \ubd84\uc11d", _web_asset("detail.js"))
+        self.assertIn("Market-wide stock discovery", _web_asset("index.html"))
 
     def test_client_ip_trusts_forwarded_for_only_when_configured(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
