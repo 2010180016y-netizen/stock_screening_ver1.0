@@ -341,6 +341,11 @@ def connect(config: AppConfig) -> Any:
 
 
 def init_db(conn: sqlite3.Connection) -> None:
+    # The backfill runs first: the schema script creates an index over
+    # provider_alert_events(tenant_id), which fails outright on a database created
+    # before that column existed. Running it again afterwards covers a brand new
+    # database, where the table did not exist yet on the first pass.
+    _ensure_provider_alert_tenant_column(conn)
     conn.executescript(POSTGRES_SCHEMA_SQL if _is_postgres(conn) else SCHEMA_SQL)
     _ensure_provider_alert_tenant_column(conn)
     conn.commit()
@@ -376,31 +381,30 @@ def _ensure_provider_alert_tenant_column(conn: sqlite3.Connection) -> None:
     if getattr(conn, _TENANT_COLUMN_READY_FLAG, False):
         return
     if _is_postgres(conn):
-        row = conn.execute(
-            """
-            SELECT 1 FROM information_schema.columns
-            WHERE table_schema = 'public'
-              AND table_name = 'provider_alert_events'
-              AND column_name = 'tenant_id'
-            """
-        ).fetchone()
-        if row is None:
-            conn.execute("ALTER TABLE provider_alert_events ADD COLUMN IF NOT EXISTS tenant_id TEXT")
-            conn.execute(
+        columns = {
+            str(row["column_name"])
+            for row in conn.execute(
                 """
-                CREATE INDEX IF NOT EXISTS idx_provider_alert_events_tenant_time
-                ON provider_alert_events(tenant_id, created_at DESC)
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'provider_alert_events'
                 """
-            )
-        _mark_tenant_column_ready(conn)
+            ).fetchall()
+        }
+    else:
+        columns = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(provider_alert_events)").fetchall()
+            if "name" in row.keys()
+        }
+    if not columns:
+        # The table does not exist yet. init_db() is about to create it with the column
+        # already in place, so there is nothing to migrate and nothing to cache.
         return
-    columns = {
-        str(row["name"])
-        for row in conn.execute("PRAGMA table_info(provider_alert_events)").fetchall()
-        if "name" in row.keys()
-    }
     if "tenant_id" not in columns:
-        conn.execute("ALTER TABLE provider_alert_events ADD COLUMN tenant_id TEXT")
+        if _is_postgres(conn):
+            conn.execute("ALTER TABLE provider_alert_events ADD COLUMN IF NOT EXISTS tenant_id TEXT")
+        else:
+            conn.execute("ALTER TABLE provider_alert_events ADD COLUMN tenant_id TEXT")
         conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_provider_alert_events_tenant_time

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -26,9 +27,9 @@ from vcb_alt.sample_data import get_snapshot
 from vcb_alt.scoring import evaluate_snapshot
 
 
-def make_config(root: Path) -> AppConfig:
+def make_config(root: Path, database_url: str = "sqlite:///./data/test.db") -> AppConfig:
     return AppConfig(
-        database_url="sqlite:///./data/test.db",
+        database_url=database_url,
         log_level="INFO",
         timezone="Asia/Seoul",
         data_provider="sample",
@@ -90,6 +91,46 @@ class DatabaseTests(unittest.TestCase):
                     self.assertNotIn("ALTER TABLE", sql)
                     self.assertNotIn("CREATE INDEX", sql)
                     self.assertNotIn("PRAGMA TABLE_INFO", sql)
+
+    def test_init_db_upgrades_a_database_created_before_tenant_id(self) -> None:
+        """Running init-db against an existing database must not fail.
+
+        The schema script builds an index over provider_alert_events(tenant_id), so on a
+        database created before that column existed the index creation raised
+        "no such column: tenant_id" and init-db returned a 500.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "legacy.db"
+            legacy = sqlite3.connect(db_path)
+            legacy.execute(
+                """
+                CREATE TABLE provider_alert_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    provider TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    severity TEXT NOT NULL,
+                    code TEXT,
+                    message TEXT,
+                    recovery TEXT,
+                    metadata_json TEXT,
+                    resolved INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            legacy.commit()
+            legacy.close()
+
+            config = make_config(Path(tmp), database_url=f"sqlite:///{db_path.as_posix()}")
+            with connect(config) as conn:
+                init_db(conn)
+                columns = {
+                    str(row["name"])
+                    for row in conn.execute("PRAGMA table_info(provider_alert_events)").fetchall()
+                }
+                self.assertIn("tenant_id", columns)
+                add_watchlist(conn, ["PLTR"])
+                self.assertEqual(len(list_watchlist(conn)), 1)
 
     def test_ensure_initialized_backfills_legacy_provider_alert_table(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
