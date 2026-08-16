@@ -18,3 +18,8 @@ vcb-alt = "vcb_alt.cli:main"
 
 [tool.setuptools]
 packages = ["vcb_alt"]
+
+# web.py serves these files at runtime and only falls back to its embedded copies when
+# they are missing, so an installed package without them would quietly ship a stale UI.
+[tool.setuptools.package-data]
+vcb_alt = ["web_assets/*"]

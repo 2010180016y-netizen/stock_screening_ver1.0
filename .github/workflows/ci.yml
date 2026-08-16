@@ -1,0 +1,130 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    name: Tests, lint, types, secrets
+    runs-on: ubuntu-latest
+
+    services:
+      # Lets tests/test_postgres_paths.py exercise the real PostgreSQL bootstrap path,
+      # which local SQLite development never reaches. Without this the integration tests
+      # skip and the production database branch stays unverified.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: vcbalt
+          POSTGRES_PASSWORD: vcbalt
+          POSTGRES_DB: vcbalt_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U vcbalt"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      VCB_ALT_TEST_DATABASE_URL: postgresql://vcbalt:vcbalt@localhost:5432/vcbalt_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip -r requirements.txt
+
+      - name: Secret scan
+        run: python tools/secret_scan.py
+
+      - name: Lint
+        run: python tools/lint.py
+
+      - name: Type hints
+        run: python tools/typecheck.py
+
+      - name: Unit and integration tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Build check
+        run: python -m compileall vcb_alt tests tools api
+
+      - name: Packaging check
+        # web_assets are served at runtime, so an installed package that drops them
+        # would fall back to the embedded copies instead of the real UI.
+        run: |
+          python -m pip install . --target /tmp/pkgcheck --no-deps --quiet
+          python - <<'PY'
+          from pathlib import Path
+          import sys
+
+          assets = Path("/tmp/pkgcheck/vcb_alt/web_assets")
+          missing = [
+              name
+              for name in ("index.html", "detail.html", "login.html", "app.css", "app.js", "detail.js")
+              if not (assets / name).is_file()
+          ]
+          if missing:
+              print(f"installed package is missing web assets: {missing}")
+              print("add them to [tool.setuptools.package-data] in pyproject.toml")
+              sys.exit(1)
+          print("packaged web assets ok")
+          PY
+
+  web-smoke:
+    name: Web route smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip -r requirements.txt
+
+      - name: Start the local server
+        run: |
+          python -m vcb_alt init-db --seed
+          python -m vcb_alt web --host 127.0.0.1 --port 8765 &
+          for _ in $(seq 1 20); do
+            curl -sf http://127.0.0.1:8765/api/health >/dev/null && break
+            sleep 1
+          done
+
+      - name: Check every served route
+        run: |
+          set -e
+          for path in / /ticker/AAPL /assets/app.js /assets/detail.js /assets/app.css /terms /privacy /risk-disclosure /api/health; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8765${path}")
+            echo "${path} -> ${code}"
+            test "${code}" = "200"
+          done
+
+      - name: Check served assets are valid UTF-8 with intact Korean text
+        run: |
+          python - <<'PY'
+          import sys
+          import urllib.request
+
+          for name in ("app.js", "detail.js"):
+              raw = urllib.request.urlopen(f"http://127.0.0.1:8765/assets/{name}").read()
+              try:
+                  text = raw.decode("utf-8")
+              except UnicodeDecodeError as exc:
+                  sys.exit(f"{name} is not valid UTF-8: {exc}")
+              if "�" in text:
+                  sys.exit(f"{name} contains replacement characters (encoding damage)")
+              if not any("가" <= ch <= "힣" for ch in text):
+                  sys.exit(f"{name} lost its Korean strings")
+              print(f"{name} ok ({len(raw)} bytes)")
+          PY
