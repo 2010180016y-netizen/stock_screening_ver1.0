@@ -1,0 +1,17 @@
+# The repository is edited on Windows and deployed to Linux (Vercel, Docker, GitHub
+# Actions). Pinning LF everywhere keeps the two identical, silences the "LF will be
+# replaced by CRLF" warnings on every git command, and stops line-ending-only diffs.
+# The index already stores LF, so this changes no committed content.
+* text=auto eol=lf
+
+# Served web assets must stay byte-identical across platforms.
+*.html text eol=lf
+*.css  text eol=lf
+*.js   text eol=lf
+
+# Never touched by line-ending conversion.
+*.png binary
+*.jpg binary
+*.ico binary
+*.db  binary
+*.sqlite binary
