@@ -67,6 +67,14 @@ const I18N = {
     terms: 'Terms',
     ready: 'ready',
     running: 'running',
+    waiting: 'waiting for worker',
+    scan_queued: 'Scan queued. A background worker is preparing the market snapshot.',
+    scan_waiting: 'Preparing the market snapshot ({attempt}/{total}). This usually takes under a minute.',
+    scan_ready_after_wait: 'Market snapshot ready. Showing the latest candidates.',
+    scan_still_running: 'The snapshot is still being prepared. Leave this page open or press Refresh status in a moment.',
+    scan_job_failed: 'The market scan could not finish: {reason}',
+    scan_provider_blocked: 'Live market data provider rejected our credentials, so no candidates can be shown. An operator needs to update the provider keys.',
+    provider_blocked_badge: 'fail-closed: provider auth failed',
     not_run: 'Not run',
     failures: 'failures',
     selection_completed: 'Selection completed in {ms} ms.',
@@ -134,6 +142,14 @@ const I18N = {
     terms: '약관',
     ready: '준비됨',
     running: '실행 중',
+    waiting: '작업 대기 중',
+    scan_queued: '스캔을 대기열에 등록했습니다. 백그라운드 작업이 시장 스냅샷을 준비하고 있습니다.',
+    scan_waiting: '시장 스냅샷을 준비하는 중입니다 ({attempt}/{total}). 보통 1분 이내에 끝납니다.',
+    scan_ready_after_wait: '시장 스냅샷이 준비되었습니다. 최신 후보를 표시합니다.',
+    scan_still_running: '스냅샷이 아직 준비 중입니다. 이 페이지를 열어 두거나 잠시 후 상태 새로고침을 눌러 주세요.',
+    scan_job_failed: '시장 스캔을 마치지 못했습니다: {reason}',
+    scan_provider_blocked: '실시간 시장 데이터 제공자가 인증을 거부해 후보를 표시할 수 없습니다. 운영자가 제공자 키를 갱신해야 합니다.',
+    provider_blocked_badge: 'fail-closed: 제공자 인증 실패',
     not_run: '미실행',
     failures: '실패',
     selection_completed: '후보 계산이 {ms} ms 안에 완료되었습니다.',
@@ -616,39 +632,100 @@ async function removeTicker(ticker) {
   }
 }
 
-async function runScan() {
-  setBusy(true);
-  try {
-    const data = await api(endpoint('/api/scan', '/api/user/scan'), { method: state.config?.user_auth_enabled ? 'POST' : 'GET' });
-    if (!Array.isArray(data.items)) {
-      const job = data.job || {};
-      const status = data.status || job.status || 'queued';
-      updateDiscoverySummary(data);
-      showNotice(state.lang === 'ko'
-        ? `시장 전체 스캔 스냅샷 작업 상태: ${status}`
-        : `Market scan snapshot status: ${status}`);
+// In production the scan is owned by a background worker: the API answers 202 with a
+// queued/pending job instead of a report. Without polling the dashboard would sit on
+// "status: queued" and look broken, so wait for the worker and render the result.
+const SCAN_POLL_INTERVAL_MS = 5000;
+const SCAN_POLL_ATTEMPTS = 12;
+let scanPollToken = 0;
+
+function isQueuedScanOutcome(data) {
+  return !Array.isArray(data.items) && (data.state === 'queued' || data.state === 'pending' || Boolean(data.job));
+}
+
+function looksProviderBlocked(text) {
+  const value = String(text || '').toLowerCase();
+  return value.includes('401') || value.includes('unauthorized') || value.includes('credential') || value.includes('auth');
+}
+
+function markFailClosed(providerBlocked) {
+  document.getElementById('fail-closed-state').textContent = providerBlocked
+    ? t('provider_blocked_badge')
+    : (state.lang === 'ko' ? 'fail-closed: 후보 미노출' : 'fail-closed: candidates blocked');
+}
+
+function renderScanReport(data, { notice } = {}) {
+  state.scan = data.items;
+  state.failures = data.failures || [];
+  renderScan(data.items, data.elapsed_ms);
+  if (data.selection) {
+    state.selection = data.selection;
+    state.selection.elapsed_ms = data.elapsed_ms;
+    renderSelection(data.selection, data.elapsed_ms);
+  }
+  updateDataStatus(data.items, data.failures || []);
+  updateDiscoverySummary(data);
+  showNotice(notice || (state.lang === 'ko'
+    ? `시장 전체 스캔이 ${data.elapsed_ms} ms 안에 완료되었습니다.`
+    : `Market scan completed in ${data.elapsed_ms} ms.`));
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function waitForMarketScanJob(jobId, token) {
+  for (let attempt = 1; attempt <= SCAN_POLL_ATTEMPTS; attempt += 1) {
+    await sleep(SCAN_POLL_INTERVAL_MS);
+    if (token !== scanPollToken) return;  // a newer scan superseded this one
+    let job;
+    try {
+      job = await api(`/api/jobs/market-scan/${encodeURIComponent(jobId)}`);
+    } catch (error) {
+      markFailClosed(looksProviderBlocked(error.message));
+      showNotice(error.message, true);
+      return;
+    }
+    if (job.status === 'completed' && job.report && Array.isArray(job.report.items)) {
+      renderScanReport(job.report, { notice: t('scan_ready_after_wait') });
       await loadOps();
       return;
     }
-    state.scan = data.items;
-    state.failures = data.failures || [];
-    renderScan(data.items, data.elapsed_ms);
-    if (data.selection) {
-      state.selection = data.selection;
-      state.selection.elapsed_ms = data.elapsed_ms;
-      renderSelection(data.selection, data.elapsed_ms);
+    if (job.status === 'failed' || job.status === 'dead_letter') {
+      const reason = job.message || job.error_code || job.status;
+      const providerBlocked = looksProviderBlocked(`${job.error_code} ${job.message}`);
+      markFailClosed(providerBlocked);
+      showNotice(providerBlocked ? t('scan_provider_blocked') : t('scan_job_failed', { reason }), true);
+      await loadOps();
+      return;
     }
-    updateDataStatus(data.items, data.failures || []);
-    updateDiscoverySummary(data);
-    showNotice(state.lang === 'ko' ? `시장 전체 스캔이 ${data.elapsed_ms} ms 안에 완료되었습니다.` : `Market scan completed in ${data.elapsed_ms} ms.`);
+    showNotice(t('scan_waiting', { attempt, total: SCAN_POLL_ATTEMPTS }));
+  }
+  showNotice(t('scan_still_running'));
+}
+
+async function runScan() {
+  const token = (scanPollToken += 1);
+  setBusy(true);
+  try {
+    const data = await api(endpoint('/api/scan', '/api/user/scan'), { method: state.config?.user_auth_enabled ? 'POST' : 'GET' });
+    if (isQueuedScanOutcome(data)) {
+      const job = data.job || {};
+      updateDiscoverySummary(data);
+      showNotice(t('scan_queued'));
+      document.getElementById('runtime').textContent = t('waiting');
+      if (!job.id) {
+        showNotice(t('scan_still_running'));
+        return;
+      }
+      await waitForMarketScanJob(job.id, token);
+      return;
+    }
+    renderScanReport(data);
     await loadOps();
   } catch (error) {
-    document.getElementById('fail-closed-state').textContent = state.lang === 'ko'
-      ? 'fail-closed: 후보 미노출'
-      : 'fail-closed: candidates blocked';
+    markFailClosed(looksProviderBlocked(error.message));
     showNotice(error.message, true);
   } finally {
-    setBusy(false);
+    if (token === scanPollToken) setBusy(false);
   }
 }
 

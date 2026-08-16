@@ -328,6 +328,45 @@ class SaasAuthTests(unittest.TestCase):
                 self.assertEqual(response.data["state"], "queued")
                 self.assertNotIn("items", response.data)
 
+    def test_user_scan_returns_202_with_a_pollable_job_id(self) -> None:
+        """The dashboard polls this contract, so its shape must stay stable.
+
+        /api/user/scan answers 202 with {state, status, job.id} when no fresh snapshot
+        exists, and job.id must be readable from /api/jobs/market-scan/{id}.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            config = make_config(Path(tmp))
+            config = AppConfig(
+                **{
+                    **config.__dict__,
+                    "scan_mode": "market_universe",
+                    "scan_queue_enabled": True,
+                    "worker_token": "worker-token-123456",
+                    "worker_cron_enabled": True,
+                    "production_saas_mode": True,
+                }
+            )
+            with connect(config) as conn:
+                init_db(conn)
+                init_saas_db(conn)
+                create_user(conn, email="scan-poll@example.com", password="very-secure-password")
+                login = login_user(conn, email="scan-poll@example.com", password="very-secure-password")
+                auth = {"authorization": f"Bearer {login['session_token']}"}
+
+                queued = handle_api(config, "POST", "/api/user/scan", "", None, auth)
+                self.assertEqual(queued.status_code, 202)
+                self.assertIn(queued.data["state"], {"queued", "pending"})
+                job_id = queued.data["job"]["id"]
+                self.assertTrue(job_id)
+
+                job = handle_api(config, "GET", f"/api/jobs/market-scan/{job_id}", "", None, auth)
+                self.assertTrue(job.ok)
+                self.assertEqual(job.data["id"], job_id)
+                self.assertIn(job.data["status"], {"queued", "running"})
+                # Fields the dashboard reads when the worker finishes or gives up.
+                for key in ("report", "status", "message", "error_code"):
+                    self.assertIn(key, job.data)
+
     def test_market_universe_tenant_job_does_not_inline_provider_scan(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config = make_config(Path(tmp))

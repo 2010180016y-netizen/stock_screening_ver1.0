@@ -92,6 +92,15 @@ jobs:
       - name: Install dependencies
         run: python -m pip install --upgrade pip -r requirements.txt
 
+      - name: Check served JavaScript parses
+        # There is no JS test suite, so a syntax error in web_assets would only surface
+        # as a blank dashboard in a browser.
+        run: |
+          for file in vcb_alt/web_assets/*.js; do
+            node --check "$file"
+            echo "${file} ok"
+          done
+
       - name: Start the local server
         run: |
           python -m vcb_alt init-db --seed
