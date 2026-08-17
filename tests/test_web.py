@@ -8,6 +8,11 @@ from pathlib import Path
 from vcb_alt.config import AppConfig
 from vcb_alt.db import add_watchlist, connect, init_db
 from vcb_alt.performance import benchmark_scoring
+from vcb_alt.web_auth import (
+    TENANT_AUTHENTICATED_PATHS,
+    is_tenant_authenticated_path,
+    requires_shared_token,
+)
 from vcb_alt.web import (
     WEB_ASSET_DIR,
     _auth_cookie_headers,
@@ -133,6 +138,38 @@ class WebTests(unittest.TestCase):
             self.assertFalse(_is_authorized(_FakeHandler({}), config, "token=1234567890abcdef"))
             self.assertTrue(_is_authorized(_FakeHandler({"authorization": "Bearer 1234567890abcdef"}), config, ""))
             self.assertEqual(_auth_cookie_headers(_FakeHandler({}), config, "token=1234567890abcdef"), {})
+
+    def test_shared_token_gate_and_tenant_paths_agree(self) -> None:
+        """The auth gate and the rate limiter share one list of tenant paths.
+
+        They used to keep separate copies that had to be edited together; adding a path
+        to one and not the other would either expose it or misprice its rate limit.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            base = make_config(Path(tmp))
+            public = AppConfig(
+                **{
+                    **base.__dict__,
+                    "public_web_enabled": True,
+                    "web_access_token": "1234567890abcdef",
+                    "user_auth_enabled": True,
+                }
+            )
+            for path in sorted(TENANT_AUTHENTICATED_PATHS):
+                with self.subTest(path=path):
+                    self.assertTrue(is_tenant_authenticated_path(path))
+                    self.assertFalse(requires_shared_token(path, public))
+
+            for path in ("/api/health", "/api/auth/register", "/api/auth/login", "/api/admin/run-worker"):
+                with self.subTest(path=path):
+                    self.assertFalse(requires_shared_token(path, public))
+
+            self.assertTrue(requires_shared_token("/api/provider-status", public))
+            self.assertTrue(is_tenant_authenticated_path("/api/jobs/market-scan/abc"))
+            self.assertFalse(is_tenant_authenticated_path("/api/provider-status"))
+
+            no_public = AppConfig(**{**base.__dict__, "public_web_enabled": False})
+            self.assertFalse(requires_shared_token("/api/provider-status", no_public))
 
     def test_dashboard_exposes_market_wide_discovery_regions(self) -> None:
         index_html = _served("index.html")

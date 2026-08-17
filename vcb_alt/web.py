@@ -67,6 +67,19 @@ from .tenant_store import (
     require_user,
     save_user_evaluation,
 )
+from .web_auth import (
+    auth_cookie_headers,
+    bearer_token,
+    has_valid_worker_token,
+    is_authorized,
+    is_global_operator,
+    is_https_request,
+    is_tenant_authenticated_path,
+    production_saas_ready,
+    require_worker_token,
+    requires_shared_token,
+    worker_token_candidates,
+)
 from .validation import validate_ticker
 
 _API_RATE_LIMITER = InMemoryRateLimiter()
@@ -78,6 +91,19 @@ LEGACY_GLOBAL_API_PATHS = {
 }
 WEB_ASSET_DIR = Path(__file__).with_name("web_assets")
 _WEB_ASSET_CACHE: dict[str, str] = {}
+
+# Backwards-compatible aliases for the private names these helpers had before the split.
+_is_authorized = is_authorized
+_auth_cookie_headers = auth_cookie_headers
+_is_https_request = is_https_request
+_requires_shared_token = requires_shared_token
+_has_valid_worker_token = has_valid_worker_token
+_production_saas_ready = production_saas_ready
+_require_worker_token = require_worker_token
+_worker_token_candidates = worker_token_candidates
+_is_global_operator = is_global_operator
+_bearer_token = bearer_token
+_is_tenant_authenticated_path = is_tenant_authenticated_path
 
 
 def run_web(host: str = "127.0.0.1", port: int = 8765) -> None:
@@ -160,17 +186,17 @@ def route_request(handler: BaseHTTPRequestHandler, config: AppConfig, method: st
             _send_html(handler, _web_asset("risk-disclosure.html"))
             return
         if method == "GET" and path == "/":
-            if config.public_web_enabled and not _is_authorized(handler, config, parsed.query):
+            if config.public_web_enabled and not is_authorized(handler, config, parsed.query):
                 _send_html(handler, _web_asset("login.html"), status=HTTPStatus.UNAUTHORIZED)
                 return
-            headers = _auth_cookie_headers(handler, config, parsed.query)
+            headers = auth_cookie_headers(handler, config, parsed.query)
             _send_html(handler, _web_asset("index.html"), extra_headers=headers)
             return
         if method == "GET" and path.startswith("/ticker/"):
-            if config.public_web_enabled and not _is_authorized(handler, config, parsed.query):
+            if config.public_web_enabled and not is_authorized(handler, config, parsed.query):
                 _send_html(handler, _web_asset("login.html"), status=HTTPStatus.UNAUTHORIZED)
                 return
-            headers = _auth_cookie_headers(handler, config, parsed.query)
+            headers = auth_cookie_headers(handler, config, parsed.query)
             _send_html(handler, _web_asset("detail.html"), extra_headers=headers)
             return
         if path.startswith("/api/"):
@@ -182,7 +208,7 @@ def route_request(handler: BaseHTTPRequestHandler, config: AppConfig, method: st
                 )
                 _send_json(handler, result, result.status_code)
                 return
-            if _requires_shared_token(path, config) and not _is_authorized(handler, config, parsed.query):
+            if requires_shared_token(path, config) and not is_authorized(handler, config, parsed.query):
                 result = OperationResult.failure(
                     "Authentication is required for public web mode.",
                     status_code=401,
@@ -240,7 +266,7 @@ def handle_api(
             raise ValidationError("Production worker trigger requires POST.")
         if not config.worker_cron_enabled:
             return OperationResult.success("Worker cron is disabled.", {"processed": 0, "failed": 0, "disabled": True})
-        _require_worker_token(config, query, headers or {})
+        require_worker_token(config, query, headers or {})
         if not config.scan_queue_enabled:
             raise ValidationError("Scan queue is not enabled.")
         limit = int(parse_qs(query).get("limit", ["10"])[0])
@@ -278,17 +304,17 @@ def handle_api(
                 login_user(conn, email=str(body.get("email", "")), password=str(body.get("password", ""))),
             )
         if method == "GET" and path == "/api/me":
-            user = require_user(conn, _bearer_token(headers or {}))
+            user = require_user(conn, bearer_token(headers or {}))
             return OperationResult.success("User loaded.", public_user(user))
         if method == "GET" and path == "/api/user/export":
-            user = require_user(conn, _bearer_token(headers or {}))
+            user = require_user(conn, bearer_token(headers or {}))
             return OperationResult.success("User data exported.", export_user_data(conn, user))
         if method == "DELETE" and path == "/api/user/account":
-            user = require_user(conn, _bearer_token(headers or {}))
+            user = require_user(conn, bearer_token(headers or {}))
             confirm = parse_qs(query).get("confirm", [""])[0]
             return OperationResult.success("User account deleted.", delete_user_account(conn, user, confirm))
         if path == "/api/user/watchlist":
-            user = require_user(conn, _bearer_token(headers or {}))
+            user = require_user(conn, bearer_token(headers or {}))
             if method == "GET":
                 items = list_user_watchlist(conn, user)
                 return OperationResult.success(
@@ -318,7 +344,7 @@ def handle_api(
         if path == "/api/jobs/scan" and method == "POST":
             if not config.user_auth_enabled or not config.scan_queue_enabled:
                 raise ValidationError("Scan queue is not enabled.")
-            user = require_user(conn, _bearer_token(headers or {}))
+            user = require_user(conn, bearer_token(headers or {}))
             if config.scan_mode == "market_universe":
                 outcome = enqueue_or_get_market_scan_snapshot(config, conn, user)
                 if outcome["state"] == "fresh":
@@ -328,12 +354,12 @@ def handle_api(
         if path == "/api/user/scan" and method in {"GET", "POST"}:
             if not config.user_auth_enabled:
                 raise ValidationError("User authentication is not enabled.")
-            user = require_user(conn, _bearer_token(headers or {}))
+            user = require_user(conn, bearer_token(headers or {}))
             return _scan_user(config, conn, user)
         if path == "/api/user/select" and method in {"GET", "POST"}:
             if not config.user_auth_enabled:
                 raise ValidationError("User authentication is not enabled.")
-            user = require_user(conn, _bearer_token(headers or {}))
+            user = require_user(conn, bearer_token(headers or {}))
             if config.scan_mode == "market_universe":
                 return _scan_user(config, conn, user, message="Selection completed.")
             evaluations, failures, elapsed_ms = _evaluate_user_watchlist(config, conn, user)
@@ -345,34 +371,34 @@ def handle_api(
         if path == "/api/jobs" and method == "GET":
             if not config.user_auth_enabled or not config.scan_queue_enabled:
                 raise ValidationError("Scan queue is not enabled.")
-            user = require_user(conn, _bearer_token(headers or {}))
+            user = require_user(conn, bearer_token(headers or {}))
             jobs = list_scan_jobs(conn, user)
             return OperationResult.success("Scan jobs loaded.", {"items": jobs, "count": len(jobs)})
         if path.startswith("/api/jobs/market-scan/") and method == "GET":
             if not config.user_auth_enabled or not config.scan_queue_enabled:
                 raise ValidationError("Scan queue is not enabled.")
-            require_user(conn, _bearer_token(headers or {}))
+            require_user(conn, bearer_token(headers or {}))
             job_id = path.removeprefix("/api/jobs/market-scan/")
             return OperationResult.success("Market scan job loaded.", get_market_scan_job(conn, job_id))
         if path.startswith("/api/jobs/") and method == "GET":
             if not config.user_auth_enabled or not config.scan_queue_enabled:
                 raise ValidationError("Scan queue is not enabled.")
-            user = require_user(conn, _bearer_token(headers or {}))
+            user = require_user(conn, bearer_token(headers or {}))
             job_id = path.removeprefix("/api/jobs/")
             return OperationResult.success("Scan job loaded.", get_scan_job(conn, user, job_id))
         if method == "GET" and path == "/api/admin/users":
-            user = require_role(require_user(conn, _bearer_token(headers or {})), {"owner", "admin"})
+            user = require_role(require_user(conn, bearer_token(headers or {})), {"owner", "admin"})
             return OperationResult.success("Tenant users loaded.", {"items": list_tenant_users(conn, user)})
         if method == "GET" and path == "/api/admin/audit-events":
-            user = require_role(require_user(conn, _bearer_token(headers or {})), {"owner", "admin"})
+            user = require_role(require_user(conn, bearer_token(headers or {})), {"owner", "admin"})
             return OperationResult.success("Audit events loaded.", {"items": list_audit_events(conn, user)})
         if method == "GET" and path == "/api/admin/queue-status":
-            user = require_role(require_user(conn, _bearer_token(headers or {})), {"owner", "admin"})
+            user = require_role(require_user(conn, bearer_token(headers or {})), {"owner", "admin"})
             return OperationResult.success("Queue status loaded.", queue_status(conn, user["tenant_id"]))
         if method == "GET" and path == "/api/admin/provider-alerts":
-            user = require_user(conn, _bearer_token(headers or {}))
+            user = require_user(conn, bearer_token(headers or {}))
             limit = int(parse_qs(query).get("limit", ["20"])[0])
-            if _is_global_operator(config, user):
+            if is_global_operator(config, user):
                 visibility = "global_operator"
                 items = recent_provider_alerts(conn, max(1, min(limit, 100)), include_global=True)
             else:
@@ -595,7 +621,7 @@ def _release_status(config: AppConfig) -> dict[str, Any]:
         "scoring_version": SCORING_VERSION,
         "user_trial_ready": True,
         "public_launch_ready": False,
-        "production_saas_ready": _production_saas_ready(config),
+        "production_saas_ready": production_saas_ready(config),
         "public_scope": "Single-operator/token-protected preview, not unrestricted public SaaS.",
         "configured_data": {
             "market_provider": status.get("provider"),
@@ -825,74 +851,8 @@ def _send_text(
     handler.wfile.write(body)
 
 
-def _is_authorized(handler: BaseHTTPRequestHandler, config: AppConfig, query: str) -> bool:
-    if not config.public_web_enabled:
-        return True
-    expected = config.web_access_token
-    if not expected:
-        return False
-    candidates: list[str] = []
-    query_token = parse_qs(query).get("token", [""])[0]
-    if query_token and config.allow_query_token_auth:
-        candidates.append(query_token)
-    auth_header = handler.headers.get("authorization", "")
-    if auth_header.lower().startswith("bearer "):
-        candidates.append(auth_header[7:].strip())
-    cookie_header = handler.headers.get("cookie", "")
-    if cookie_header:
-        cookie = SimpleCookie()
-        cookie.load(cookie_header)
-        if "vcb_alt_token" in cookie:
-            candidates.append(cookie["vcb_alt_token"].value)
-    return any(hmac.compare_digest(candidate, expected) for candidate in candidates)
 
 
-def _auth_cookie_headers(handler: BaseHTTPRequestHandler, config: AppConfig, query: str) -> dict[str, str]:
-    if not config.public_web_enabled:
-        return {}
-    if not config.allow_query_token_auth:
-        return {}
-    query_token = parse_qs(query).get("token", [""])[0]
-    if not query_token or not hmac.compare_digest(query_token, config.web_access_token):
-        return {}
-    secure_suffix = "; Secure" if _is_https_request(handler) else ""
-    return {
-        "Set-Cookie": f"vcb_alt_token={query_token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=28800{secure_suffix}",
-    }
-
-
-def _is_https_request(handler: BaseHTTPRequestHandler) -> bool:
-    forwarded_proto = handler.headers.get("x-forwarded-proto", "")
-    if forwarded_proto.lower().split(",", 1)[0].strip() == "https":
-        return True
-    forwarded_ssl = handler.headers.get("x-forwarded-ssl", "")
-    return forwarded_ssl.lower() == "on"
-
-
-def _requires_shared_token(path: str, config: AppConfig) -> bool:
-    if not config.public_web_enabled:
-        return False
-    if path in {"/api/health", "/api/auth/register", "/api/auth/login", "/api/admin/run-worker"}:
-        return False
-    if config.user_auth_enabled and (
-        path in {
-            "/api/me",
-            "/api/user/watchlist",
-            "/api/user/export",
-            "/api/user/account",
-            "/api/user/scan",
-            "/api/user/select",
-            "/api/jobs",
-            "/api/jobs/scan",
-            "/api/admin/users",
-            "/api/admin/audit-events",
-            "/api/admin/queue-status",
-            "/api/admin/provider-alerts",
-        }
-        or path.startswith("/api/jobs/")
-    ):
-        return False
-    return True
 
 
 def _allow_request(handler: BaseHTTPRequestHandler, config: AppConfig, method: str, path: str) -> bool:
@@ -915,10 +875,10 @@ def _rate_limit_bucket(
     headers = dict(handler.headers)
     ip = _client_ip(handler, config)
     route_group = _rate_limit_route_group(method, path)
-    if path == "/api/admin/run-worker" and _has_valid_worker_token(config, handler.path, headers):
+    if path == "/api/admin/run-worker" and has_valid_worker_token(config, handler.path, headers):
         return ("worker:run", config.worker_rate_limit_per_minute)
-    if config.user_auth_enabled and _is_tenant_authenticated_path(path):
-        token = _bearer_token(headers)
+    if config.user_auth_enabled and is_tenant_authenticated_path(path):
+        token = bearer_token(headers)
         if token:
             user = _rate_limit_user_from_token(conn, token)
             if user:
@@ -956,26 +916,6 @@ def _rate_limit_route_group(method: str, path: str) -> str:
     return path.removeprefix("/api/") or "api"
 
 
-def _is_tenant_authenticated_path(path: str) -> bool:
-    return (
-        path
-        in {
-            "/api/me",
-            "/api/user/watchlist",
-            "/api/user/export",
-            "/api/user/account",
-            "/api/user/scan",
-            "/api/user/select",
-            "/api/jobs",
-            "/api/jobs/scan",
-            "/api/admin/users",
-            "/api/admin/audit-events",
-            "/api/admin/queue-status",
-            "/api/admin/provider-alerts",
-        }
-        or path.startswith("/api/jobs/")
-    )
-
 
 def _rate_limit_user_from_token(conn: Any | None, token: str) -> dict[str, Any] | None:
     if conn is None:
@@ -984,54 +924,3 @@ def _rate_limit_user_from_token(conn: Any | None, token: str) -> dict[str, Any] 
         return authenticate_session(conn, token)
     except AppError:
         return None
-
-
-def _has_valid_worker_token(config: AppConfig, raw_path: str, headers: dict[str, str]) -> bool:
-    if len(config.worker_token) < 16:
-        return False
-    query = urlparse(raw_path).query
-    candidates = _worker_token_candidates(config, query, headers)
-    return any(hmac.compare_digest(candidate, config.worker_token) for candidate in candidates)
-
-
-def _production_saas_ready(config: AppConfig) -> bool:
-    return (
-        config.production_saas_mode
-        and config.database_backend == "postgresql"
-        and config.user_auth_enabled
-        and config.rate_limit_backend == "database"
-        and config.scan_queue_enabled
-        and len(config.worker_token) >= 16
-        and config.worker_cron_enabled
-    )
-
-
-def _require_worker_token(config: AppConfig, query: str, headers: dict[str, str]) -> None:
-    candidates = _worker_token_candidates(config, query, headers)
-    if len(config.worker_token) < 16:
-        raise ValidationError("Worker token is not configured.")
-    if not any(hmac.compare_digest(candidate, config.worker_token) for candidate in candidates):
-        raise UnauthorizedError("Worker authentication is required.")
-
-
-def _worker_token_candidates(config: AppConfig, query: str, headers: dict[str, str]) -> list[str]:
-    candidates = [
-        headers.get("x-vcb-worker-token", ""),
-        _bearer_token(headers),
-    ]
-    if config.allow_query_token_auth and not config.production_saas_mode:
-        candidates.append(parse_qs(query).get("worker_token", [""])[0])
-    return candidates
-
-
-def _is_global_operator(config: AppConfig, user: dict[str, Any]) -> bool:
-    role = str(user.get("role") or "")
-    email = str(user.get("email") or "").lower()
-    return role in {"operator", "global_operator"} or email in config.global_operator_emails
-
-
-def _bearer_token(headers: dict[str, str]) -> str:
-    auth_header = headers.get("authorization") or headers.get("Authorization") or ""
-    if auth_header.lower().startswith("bearer "):
-        return auth_header[7:].strip()
-    return ""
