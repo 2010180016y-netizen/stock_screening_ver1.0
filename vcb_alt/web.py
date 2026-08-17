@@ -47,7 +47,6 @@ from .models import OperationResult, SCORING_VERSION
 from .portfolio import select_portfolio
 from .provider_resilience import provider_alert_payload, provider_health_report
 from .providers import get_price_history, get_snapshot, get_ticker_profile, provider_status
-from .rate_limit import DatabaseRateLimiter, InMemoryRateLimiter
 from .saas_readiness import get_saas_readiness
 from .scoring import evaluate_snapshot
 from .sample_data import SAMPLE_TICKERS
@@ -67,6 +66,13 @@ from .tenant_store import (
     require_user,
     save_user_evaluation,
 )
+from .web_ratelimit import (
+    allow_request,
+    client_ip,
+    rate_limit_bucket,
+    rate_limit_route_group,
+    rate_limit_user_from_token,
+)
 from .web_auth import (
     auth_cookie_headers,
     bearer_token,
@@ -82,8 +88,6 @@ from .web_auth import (
 )
 from .validation import validate_ticker
 
-_API_RATE_LIMITER = InMemoryRateLimiter()
-_DB_RATE_LIMITER = DatabaseRateLimiter()
 LEGACY_GLOBAL_API_PATHS = {
     "/api/watchlist": "/api/user/watchlist",
     "/api/scan": "/api/user/scan",
@@ -104,6 +108,11 @@ _worker_token_candidates = worker_token_candidates
 _is_global_operator = is_global_operator
 _bearer_token = bearer_token
 _is_tenant_authenticated_path = is_tenant_authenticated_path
+_allow_request = allow_request
+_rate_limit_bucket = rate_limit_bucket
+_client_ip = client_ip
+_rate_limit_route_group = rate_limit_route_group
+_rate_limit_user_from_token = rate_limit_user_from_token
 
 
 def run_web(host: str = "127.0.0.1", port: int = 8765) -> None:
@@ -200,7 +209,7 @@ def route_request(handler: BaseHTTPRequestHandler, config: AppConfig, method: st
             _send_html(handler, _web_asset("detail.html"), extra_headers=headers)
             return
         if path.startswith("/api/"):
-            if path != "/api/health" and not _allow_request(handler, config, method, path):
+            if path != "/api/health" and not allow_request(handler, config, method, path):
                 result = OperationResult.failure(
                     "Rate limit exceeded. Try again later.",
                     status_code=429,
@@ -849,78 +858,3 @@ def _send_text(
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
     handler.wfile.write(body)
-
-
-
-
-
-
-def _allow_request(handler: BaseHTTPRequestHandler, config: AppConfig, method: str, path: str) -> bool:
-    if config.rate_limit_backend == "database":
-        with connect(config) as conn:
-            init_db(conn)
-            key, limit = _rate_limit_bucket(handler, config, method, path, conn)
-            return _DB_RATE_LIMITER.allow(conn, key, limit)
-    key, limit = _rate_limit_bucket(handler, config, method, path, None)
-    return _API_RATE_LIMITER.allow(key, limit)
-
-
-def _rate_limit_bucket(
-    handler: BaseHTTPRequestHandler,
-    config: AppConfig,
-    method: str,
-    path: str,
-    conn: Any | None,
-) -> tuple[str, int]:
-    headers = dict(handler.headers)
-    ip = _client_ip(handler, config)
-    route_group = _rate_limit_route_group(method, path)
-    if path == "/api/admin/run-worker" and has_valid_worker_token(config, handler.path, headers):
-        return ("worker:run", config.worker_rate_limit_per_minute)
-    if config.user_auth_enabled and is_tenant_authenticated_path(path):
-        token = bearer_token(headers)
-        if token:
-            user = _rate_limit_user_from_token(conn, token)
-            if user:
-                return (
-                    f"user:{user['tenant_id']}:{user['id']}:{route_group}",
-                    config.user_rate_limit_per_minute,
-                )
-            if conn is None:
-                return (f"session:{hash_token(token)[:24]}:{route_group}", config.user_rate_limit_per_minute)
-    if path in {"/api/auth/register", "/api/auth/login"}:
-        return (f"ip:{ip}:auth", config.auth_rate_limit_per_minute)
-    return (f"ip:{ip}:{route_group}", config.rate_limit_per_minute)
-
-
-def _client_ip(handler: BaseHTTPRequestHandler, config: AppConfig) -> str:
-    forwarded = handler.headers.get("x-forwarded-for", "").split(",", 1)[0].strip()
-    if config.trusted_proxy_headers and forwarded:
-        return forwarded
-    return handler.client_address[0] if handler.client_address else "unknown"
-
-
-def _rate_limit_route_group(method: str, path: str) -> str:
-    if path.startswith("/api/jobs/"):
-        return "jobs-read"
-    if path == "/api/jobs/scan":
-        return "jobs-scan"
-    if path == "/api/user/watchlist":
-        return f"{method.lower()}:watchlist"
-    if path in {"/api/user/scan", "/api/user/select"}:
-        return "user-scan"
-    if path.startswith("/api/admin/"):
-        return "admin"
-    if path.startswith("/api/auth/"):
-        return "auth"
-    return path.removeprefix("/api/") or "api"
-
-
-
-def _rate_limit_user_from_token(conn: Any | None, token: str) -> dict[str, Any] | None:
-    if conn is None:
-        return None
-    try:
-        return authenticate_session(conn, token)
-    except AppError:
-        return None
