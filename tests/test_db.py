@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import sqlite3
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from vcb_alt.config import AppConfig
 from vcb_alt.db import (
@@ -63,6 +65,23 @@ class DatabaseTests(unittest.TestCase):
                 deleted = delete_local_data(conn)
                 self.assertEqual(deleted["watchlist"], 2)
                 self.assertEqual(list_watchlist(conn), [])
+
+    def test_postgres_without_the_driver_explains_how_to_install_it(self) -> None:
+        """psycopg is an optional extra, so the failure has to name the fix.
+
+        A SQLite-only install never imports the driver; only a PostgreSQL URL does.
+        """
+        config = make_config(
+            Path("."),
+            database_url="postgresql://user:password@localhost:5432/db",
+        )
+        config = AppConfig(**{**config.__dict__, "database_backend": "postgresql"})
+        with patch.dict(sys.modules, {"psycopg": None, "psycopg.rows": None}):
+            with self.assertRaises(RuntimeError) as caught:
+                connect(config)
+        message = str(caught.exception)
+        self.assertIn("vcb-alt[postgres]", message)
+        self.assertIn("requirements.txt", message)
 
     def test_ensure_initialized_issues_no_ddl_on_the_hot_path(self) -> None:
         """ensure_initialized() runs on every database call, so it must not emit DDL.

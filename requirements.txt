@@ -1,2 +1,9 @@
-# Runtime dependencies
+# Deployment dependencies.
+#
+# The application code is standard-library only. This file exists for the hosted builds
+# (Vercel and Docker), which run on PostgreSQL and therefore need the driver. It matches
+# the "postgres" extra in pyproject.toml; keep the two in sync.
+#
+# For local SQLite development nothing here is required: `python -m vcb_alt web` works
+# with no third-party packages installed.
 psycopg[binary]>=3.2,<4

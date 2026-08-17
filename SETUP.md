@@ -8,15 +8,22 @@
 
 ## 2. Install
 
-```powershell
-python -m pip install -r requirements.txt
-```
-
-If `python` is unavailable on this machine:
+Local development runs on SQLite and needs no third-party packages, so this step is
+only required to get the `vcb-alt` command on PATH:
 
 ```powershell
-& 'C:\stable-diffusion-ui\installer_files\env\python.exe' -m pip install -r requirements.txt
+python -m pip install .
 ```
+
+Add the PostgreSQL driver only when `VCB_ALT_DATABASE_URL` points at PostgreSQL, which
+is how the hosted deployment runs:
+
+```powershell
+python -m pip install ".[postgres]"
+```
+
+Deployment builds (Vercel, Docker) install `requirements.txt`, which carries the same
+driver.
 
 ## 3. Configure
 

@@ -9,9 +9,14 @@ description = "Local-first personal US stock screening decision-support CLI."
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "VCB-Alt" }]
-dependencies = [
-    "psycopg[binary]>=3.2,<4",
-]
+# The application itself runs on the standard library. PostgreSQL support is opt-in:
+# local development uses SQLite and does not need a database driver at all.
+dependencies = []
+
+[project.optional-dependencies]
+# Required whenever VCB_ALT_DATABASE_URL points at PostgreSQL, which is how the hosted
+# deployment runs. requirements.txt installs this for the Vercel and Docker builds.
+postgres = ["psycopg[binary]>=3.2,<4"]
 
 [project.scripts]
 vcb-alt = "vcb_alt.cli:main"

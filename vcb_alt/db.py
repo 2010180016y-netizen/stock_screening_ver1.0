@@ -329,7 +329,13 @@ def connect(config: AppConfig) -> Any:
             import psycopg
             from psycopg.rows import dict_row
         except ImportError as exc:
-            raise RuntimeError("PostgreSQL DATABASE_URL requires psycopg[binary]. Run dependency install before startup.") from exc
+            # Imported here rather than at module scope so a SQLite-only install never
+            # needs the driver. See the "postgres" extra in pyproject.toml.
+            raise RuntimeError(
+                "VCB_ALT_DATABASE_URL points at PostgreSQL, but the psycopg driver is not "
+                'installed. Install it with: python -m pip install "vcb-alt[postgres]" '
+                "(or python -m pip install -r requirements.txt)."
+            ) from exc
         return PostgresConnection(psycopg.connect(config.database_url, row_factory=dict_row))
     db_path = config.database_path
     if db_path != ":memory:":

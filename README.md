@@ -35,14 +35,14 @@ VCB-Alt scans a configured US-equity market universe, prefilters live/near-live 
 - Operator logs, failed-job history, export, and destructive delete confirmation
 - Secret-redacted logging
 - Offline deterministic sample data for first-run private beta testing
-- Python stdlib-first runtime with `psycopg[binary]` required when PostgreSQL mode is enabled
+- Python stdlib-only runtime; `psycopg[binary]` is an optional extra needed only for PostgreSQL mode
 
 ## Tech Stack
 
 - Python 3.11+
 - SQLite for local development
 - PostgreSQL/Neon for production SaaS mode
-- `psycopg[binary]` for PostgreSQL connectivity
+- `psycopg[binary]` for PostgreSQL connectivity (optional extra: `pip install ".[postgres]"`)
 - `argparse`, `sqlite3`, `unittest`, and other Python standard-library modules
 
 ## Local Setup
@@ -51,8 +51,11 @@ VCB-Alt scans a configured US-equity market universe, prefilters live/near-live 
 # Optional
 Copy-Item .env.example .env
 
-# Install runtime dependencies, including the PostgreSQL driver used by production SaaS mode.
+# Install the package. Local SQLite development needs no third-party dependencies.
 python -m pip install .
+
+# Only if VCB_ALT_DATABASE_URL points at PostgreSQL (this is how the hosted deployment runs):
+python -m pip install ".[postgres]"
 
 # Initialize local database and seed sample tickers.
 python -m vcb_alt init-db --seed
@@ -61,11 +64,9 @@ python -m vcb_alt init-db --seed
 python -m vcb_alt doctor
 ```
 
-On this Windows machine, `python` is not on PATH. The verified fallback runtime is:
-
-```powershell
-& 'C:\stable-diffusion-ui\installer_files\env\python.exe' -m vcb_alt init-db --seed
-```
+Verified on this Windows machine with Python 3.11.9 on PATH (2026-08-17). Earlier
+revisions of this document pointed at an interpreter under `C:\stable-diffusion-ui\`;
+that path no longer exists, so use `python` directly.
 
 ## Environment Variables
 
