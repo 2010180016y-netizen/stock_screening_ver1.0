@@ -15,7 +15,7 @@
       </div>
       <div class="status-strip">
         <span id="provider">provider</span>
-        <span id="runtime">ready</span>
+        <span id="runtime" aria-live="polite">ready</span>
         <div class="language-toggle" aria-label="Language">
           <button type="button" class="secondary lang-button" data-lang-option="en">EN</button>
           <button type="button" class="secondary lang-button" data-lang-option="ko">KR</button>
@@ -67,7 +67,7 @@
       </article>
     </section>
 
-    <section id="notice" class="notice" hidden></section>
+    <section id="notice" class="notice" role="status" aria-live="polite" hidden></section>
 
     <div class="workspace">
       <aside class="sidebar" aria-label="Secondary research and operations">
@@ -131,7 +131,7 @@
         </div>
 
         <section id="selection" class="candidate-grid" aria-label="Final selection">
-          <div class="empty-state" data-i18n="run_selection_empty">Scan the market to see the latest selected research set.</div>
+          <div class="empty-state" data-i18n="run_selection_empty">Nothing selected yet. Press "Scan full market" above to build a research set.</div>
         </section>
 
         <section class="panel scan-panel">
@@ -152,7 +152,7 @@
                 </tr>
               </thead>
               <tbody id="actionable-body">
-                <tr><td colspan="6" class="empty-state" data-i18n="run_scan_empty">Run scan to populate candidates.</td></tr>
+                <tr><td colspan="6" class="empty-state" data-i18n="run_scan_empty">No scan has run yet. Press "Scan full market" above to see the latest candidates.</td></tr>
               </tbody>
             </table>
           </div>
@@ -178,7 +178,7 @@
               <tbody id="excluded-body">
                 <tr>
                   <td colspan="6" class="empty-state" data-i18n="lower_confidence_empty">
-                    Lower-confidence names appear here after scanning.
+                    After a scan, names that scored below the research threshold appear here.
                   </td>
                 </tr>
               </tbody>
@@ -194,12 +194,6 @@
       <a href="/terms" data-i18n="terms">Terms</a>
     </footer>
   </main>
-  <div id="detail-modal" class="modal" hidden>
-    <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="detail-title">
-      <button id="detail-close" class="icon-button" type="button" aria-label="Close detail">x</button>
-      <div id="detail-content"></div>
-    </section>
-  </div>
   <script src="/assets/app.js"></script>
 </body>
 </html>

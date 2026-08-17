@@ -49,7 +49,7 @@ const I18N = {
     decision_first: 'Market-wide candidate review',
     entry_candidates: 'Latest research candidates',
     final_selection: 'Selected research set',
-    run_selection_empty: 'Scan the market to see the latest selected research set.',
+    run_selection_empty: 'Nothing selected yet. Press "Scan full market" above to build a research set.',
     actionable_setups: 'Research candidates',
     ticker: 'Ticker',
     archetype: 'Archetype',
@@ -58,9 +58,9 @@ const I18N = {
     allocation: 'Allocation',
     data: 'Data',
     reason: 'Reason',
-    run_scan_empty: 'Scan the market to populate candidates.',
+    run_scan_empty: 'No scan has run yet. Press "Scan full market" above to see the latest candidates.',
     monitor_excluded: 'Monitor or excluded',
-    lower_confidence_empty: 'Lower-confidence market names appear here after scanning.',
+    lower_confidence_empty: 'After a scan, names that scored below the research threshold appear here.',
     legal_notice: 'Decision support only. No automatic trading.',
     risk_disclosure: 'Risk disclosure',
     privacy: 'Privacy',
@@ -97,8 +97,11 @@ const I18N = {
     selection_completed: 'Selection completed in {ms} ms.',
     no_eligible: 'No eligible candidates. Check live data coverage or run again after data refresh.',
     allocation_guide: 'Research size reference',
-    no_excluded: 'No excluded names.',
-    no_actionable: 'No actionable setups.',
+    scanning: 'Scanning the market...',
+    scan_ended_without_result: 'The scan ended without a result. Check the data providers in Operations, then scan again.',
+    scan_snapshot_pending_empty: 'The market snapshot is still being prepared. Press Refresh status in a moment.',
+    no_excluded: 'Nothing was set aside for monitoring in this scan.',
+    no_actionable: 'This scan found no name that clears the research threshold. Nothing to review right now - try again after the next data refresh.',
     provider: 'Provider',
     data_as_of: 'Data as of',
     ops_success: 'Operational status: success',
@@ -141,7 +144,7 @@ const I18N = {
     decision_first: '시장 전체 후보 검토',
     entry_candidates: '최신 연구 후보',
     final_selection: '선정 연구 세트',
-    run_selection_empty: '시장 전체 스캔을 실행하면 최신 선정 연구 세트가 표시됩니다.',
+    run_selection_empty: '아직 선정된 종목이 없습니다. 위의 "시장 전체 스캔"을 눌러 연구 세트를 만들어 보세요.',
     actionable_setups: '연구 후보',
     ticker: '티커',
     archetype: '유형',
@@ -150,9 +153,9 @@ const I18N = {
     allocation: '검토 비중',
     data: '데이터',
     reason: '이유',
-    run_scan_empty: '시장 전체 스캔을 실행하면 후보가 표시됩니다.',
+    run_scan_empty: '아직 스캔을 실행하지 않았습니다. 위의 "시장 전체 스캔"을 눌러 최신 후보를 확인하세요.',
     monitor_excluded: '모니터링 또는 제외',
-    lower_confidence_empty: '스캔 후 낮은 신뢰도의 시장 종목이 여기에 표시됩니다.',
+    lower_confidence_empty: '스캔 후 연구 기준을 넘지 못한 종목이 여기에 표시됩니다.',
     legal_notice: '의사결정 보조 정보입니다. 자동매매를 실행하지 않습니다.',
     risk_disclosure: '위험 고지',
     privacy: '개인정보',
@@ -189,8 +192,11 @@ const I18N = {
     selection_completed: '후보 계산이 {ms} ms 안에 완료되었습니다.',
     no_eligible: '조건을 충족하는 후보가 없습니다. 데이터 커버리지를 확인하거나 갱신 후 다시 실행하세요.',
     allocation_guide: '검토 비중 참고',
-    no_excluded: '제외된 종목이 없습니다.',
-    no_actionable: '연구 후보가 없습니다.',
+    scanning: '시장을 스캔하는 중...',
+    scan_ended_without_result: '스캔이 결과 없이 끝났습니다. 운영 상태에서 데이터 제공자를 확인한 뒤 다시 스캔하세요.',
+    scan_snapshot_pending_empty: '시장 스냅샷이 아직 준비 중입니다. 잠시 후 상태 새로고침을 눌러 주세요.',
+    no_excluded: '이번 스캔에서 모니터링으로 분류된 종목이 없습니다.',
+    no_actionable: '이번 스캔에서 연구 기준을 넘은 종목이 없습니다. 지금 검토할 대상은 없으며, 다음 데이터 갱신 후 다시 실행해 보세요.',
     provider: '제공자',
     data_as_of: '데이터 기준',
     ops_success: '운영 상태: 정상',
@@ -459,6 +465,30 @@ function showNotice(message, error = false) {
 function setBusy(busy) {
   document.querySelectorAll('button').forEach((button) => { button.disabled = busy; });
   document.getElementById('runtime').textContent = busy ? t('running') : t('ready');
+}
+
+// While a scan runs the candidate tables would otherwise keep the previous result or an
+// empty state reading "no candidates" - both of which look like a finished answer.
+function showScanSkeleton() {
+  const widths = [['46%', '78%', '38%', '62%', '44%', '70%'], ['52%', '64%', '42%', '55%', '38%', '58%'], ['40%', '72%', '35%', '68%', '48%', '52%']];
+  const rows = widths.map((row) => `<tr class="skeleton-row" aria-hidden="true">${
+    row.map((width) => `<td class="skeleton-cell"><span style="width:${width}"></span></td>`).join('')
+  }</tr>`).join('');
+  ['actionable-body', 'excluded-body'].forEach((id) => { document.getElementById(id).innerHTML = rows; });
+  document.getElementById('actionable-meta').textContent = t('scanning');
+  document.getElementById('excluded-meta').textContent = t('scanning');
+}
+
+// Every path that ends a scan without a result must call this, or the placeholder rows
+// would animate forever and imply work is still in progress.
+function clearScanSkeleton(messageKey) {
+  if (!document.querySelector('.skeleton-row')) return;
+  const message = escapeHtml(t(messageKey));
+  ['actionable-body', 'excluded-body'].forEach((id) => {
+    document.getElementById(id).innerHTML = `<tr><td colspan="6" class="empty-state">${message}</td></tr>`;
+  });
+  document.getElementById('actionable-meta').textContent = t('not_run');
+  document.getElementById('excluded-meta').textContent = t('not_run');
 }
 
 function endpoint(legacyPath, tenantPath) {
@@ -797,6 +827,7 @@ async function waitForMarketScanJob(jobId, token) {
       job = await api(`/api/jobs/market-scan/${encodeURIComponent(jobId)}`);
     } catch (error) {
       markFailClosed(looksProviderBlocked(error.message));
+      clearScanSkeleton('scan_ended_without_result');
       showNotice(error.message, true);
       return;
     }
@@ -809,18 +840,21 @@ async function waitForMarketScanJob(jobId, token) {
       const reason = job.message || job.error_code || job.status;
       const providerBlocked = looksProviderBlocked(`${job.error_code} ${job.message}`);
       markFailClosed(providerBlocked);
+      clearScanSkeleton('scan_ended_without_result');
       showNotice(providerBlocked ? t('scan_provider_blocked') : t('scan_job_failed', { reason }), true);
       await loadOps();
       return;
     }
     showNotice(t('scan_waiting', { attempt, total: SCAN_POLL_ATTEMPTS }));
   }
+  clearScanSkeleton('scan_snapshot_pending_empty');
   showNotice(t('scan_still_running'));
 }
 
 async function runScan() {
   const token = (scanPollToken += 1);
   setBusy(true);
+  showScanSkeleton();
   try {
     const data = await api(endpoint('/api/scan', '/api/user/scan'), { method: state.config?.user_auth_enabled ? 'POST' : 'GET' });
     if (isQueuedScanOutcome(data)) {
@@ -829,6 +863,7 @@ async function runScan() {
       showNotice(t('scan_queued'));
       document.getElementById('runtime').textContent = t('waiting');
       if (!job.id) {
+        clearScanSkeleton('scan_snapshot_pending_empty');
         showNotice(t('scan_still_running'));
         return;
       }
@@ -839,6 +874,7 @@ async function runScan() {
     await loadOps();
   } catch (error) {
     markFailClosed(looksProviderBlocked(error.message));
+    clearScanSkeleton('scan_ended_without_result');
     showNotice(error.message, true);
   } finally {
     if (token === scanPollToken) setBusy(false);
@@ -1045,33 +1081,7 @@ function openDetailPage(ticker) {
   window.location.href = `/ticker/${encodeURIComponent(ticker)}`;
 }
 
-function openDetail(ticker) {
-  const item = findEvaluation(ticker);
-  if (!item) return;
-  const modal = document.getElementById('detail-modal');
-  const content = document.getElementById('detail-content');
-  content.innerHTML = `
-    <p class="eyebrow">${isKo() ? '점수 리포트' : 'Score report'}</p>
-    <h2 id="detail-title">${escapeHtml(item.ticker)} <span class="muted">${escapeHtml(archetypeLabel(item))}</span></h2>
-    <div class="detail-grid">
-      <div class="metric-box"><span>${t('score')}</span><strong>${item.combined_score}</strong></div>
-      <div class="metric-box"><span>${isKo() ? '검토 상태' : 'Review state'}</span><strong>${escapeHtml(publicLabel(item))}</strong></div>
-      <div class="metric-box"><span>${t('allocation_guide')}</span><strong>${item.suggested_size_pct}%</strong></div>
-      <div class="metric-box"><span>${isKo() ? '위험 참고' : 'Risk marker'}</span><strong>${item.stop_loss}</strong></div>
-    </div>
-    <p class="muted">
-      ${t('data')}: ${escapeHtml(translateSource(item.source))} / ${escapeHtml(item.data_as_of)} /
-      ${escapeHtml(translateDataQuality(item.data_quality))} / ${escapeHtml(item.scoring_version)}
-    </p>
-    <h3>${isKo() ? '선정 근거' : 'Rationale'}</h3>
-    <ul class="reason-list">${reasonItems(item).map((reason) => `<li>${escapeHtml(translateText(reason, item))}</li>`).join('')}</ul>
-  `;
-  modal.hidden = false;
-}
 
-function closeDetail() {
-  document.getElementById('detail-modal').hidden = true;
-}
 
 document.getElementById('add-form').addEventListener('submit', addTickers);
 document.getElementById('starter-research-button').addEventListener('click', seedStarterResearchList);
@@ -1079,9 +1089,5 @@ document.getElementById('scan-button').addEventListener('click', runScan);
 document.getElementById('select-button').addEventListener('click', runSelection);
 document.getElementById('refresh-button').addEventListener('click', bootstrap);
 document.getElementById('alpaca-diagnostics-button').addEventListener('click', runAlpacaDiagnostics);
-document.getElementById('detail-close').addEventListener('click', closeDetail);
-document.getElementById('detail-modal').addEventListener('click', (event) => {
-  if (event.target.id === 'detail-modal') closeDetail();
-});
 initLanguageToggle();
 bootstrap();

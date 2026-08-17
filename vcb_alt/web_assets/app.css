@@ -181,6 +181,13 @@ button {
 }
 button.secondary { background: var(--panel-soft); color: var(--ink); border-color: var(--line); }
 button:disabled { opacity: 0.55; cursor: wait; }
+/* Keyboard focus was invisible: nothing here defined an outline, so on this dark theme
+   the browser default was barely readable. :focus-visible keeps it off mouse clicks. */
+:where(a, button, input, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
 .notice {
   border: 1px solid var(--line);
   border-left: 4px solid var(--accent);
@@ -466,36 +473,25 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; }
 .diagnostics ul { margin: 0; padding-left: 18px; color: var(--ink); }
 .diagnostics li { margin-bottom: 4px; }
 .clickable { cursor: pointer; }
-.modal {
-  position: fixed;
-  inset: 0;
-  z-index: 40;
-  display: grid;
-  place-items: center;
-  padding: 20px;
-  background: rgba(0, 0, 0, 0.62);
+/* Placeholder rows shown while a scan is running, so the tables report progress
+   instead of holding the previous result or an empty state that reads as "nothing
+   found". Width varies per column to look like data rather than a progress bar. */
+.skeleton-cell span {
+  display: block;
+  height: 11px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--panel-soft) 25%, var(--line) 37%, var(--panel-soft) 63%);
+  background-size: 320px 100%;
+  animation: skeleton-sweep 1.3s ease-in-out infinite;
 }
-.modal[hidden] { display: none; }
-.modal-panel {
-  width: min(760px, 100%);
-  max-height: min(760px, calc(100vh - 40px));
-  overflow-y: auto;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 20px;
-  position: relative;
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+.skeleton-row:nth-child(2) .skeleton-cell span { opacity: 0.75; }
+.skeleton-row:nth-child(3) .skeleton-cell span { opacity: 0.5; }
+@keyframes skeleton-sweep {
+  from { background-position: -160px 0; }
+  to { background-position: 320px 0; }
 }
-.icon-button {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  width: 34px;
-  padding: 0;
-  background: var(--panel-soft);
-  color: var(--ink);
-  border-color: var(--line);
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-cell span { animation: none; }
 }
 .detail-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 16px 0; padding: 0 14px 14px; }
 .metric-box { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: var(--panel-deep); }

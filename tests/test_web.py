@@ -233,7 +233,11 @@ class WebTests(unittest.TestCase):
         self.assertIn('id="fail-closed-state"', index_html)
         self.assertIn('id="actionable-body"', index_html)
         self.assertIn('id="excluded-body"', index_html)
-        self.assertIn('id="detail-modal"', index_html)
+        # Candidate rows navigate to /ticker/{symbol}; the old in-page modal was
+        # unreachable dead markup and was removed.
+        self.assertNotIn('id="detail-modal"', index_html)
+        self.assertIn('role="status"', index_html)
+        self.assertIn(':focus-visible', _served("app.css"))
         self.assertIn('href="/risk-disclosure"', index_html)
         self.assertIn("renderSelection", app_js)
         self.assertIn("escapeHtml", app_js)
