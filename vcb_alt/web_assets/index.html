@@ -99,6 +99,21 @@
             <span id="failure-count">0 failures</span>
           </div>
           <div id="readiness" class="readiness"></div>
+
+          <div class="provider-block">
+            <div class="provider-head">
+              <h3 data-i18n="data_providers">Data providers</h3>
+              <span id="provider-policy" class="pill"></span>
+            </div>
+            <div id="provider-health" class="provider-list">
+              <div class="empty-state" data-i18n="provider_health_loading">Checking data providers.</div>
+            </div>
+            <button id="alpaca-diagnostics-button" class="secondary" type="button" data-i18n="run_alpaca_diagnostics">
+              Test Alpaca credentials
+            </button>
+            <div id="alpaca-diagnostics" class="diagnostics" hidden></div>
+          </div>
+
           <div id="failures" class="ops-list"></div>
         </section>
       </aside>

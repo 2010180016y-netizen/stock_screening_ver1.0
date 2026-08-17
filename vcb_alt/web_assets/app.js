@@ -75,6 +75,23 @@ const I18N = {
     scan_job_failed: 'The market scan could not finish: {reason}',
     scan_provider_blocked: 'Live market data provider rejected our credentials, so no candidates can be shown. An operator needs to update the provider keys.',
     provider_blocked_badge: 'fail-closed: provider auth failed',
+    data_providers: 'Data providers',
+    provider_health_loading: 'Checking data providers.',
+    provider_health_unavailable: 'Provider status is unavailable.',
+    run_alpaca_diagnostics: 'Test Alpaca credentials',
+    running_diagnostics: 'Testing credentials...',
+    diagnostics_ready: 'Alpaca credentials work. Live market data is available.',
+    diagnostics_failed: 'Alpaca rejected these credentials ({classification}).',
+    diagnostics_next_actions: 'What to do next',
+    policy_fail_closed: 'No candidates without live data',
+    policy_fallbacks: 'Configured fallbacks allowed',
+    provider_ready: 'Working',
+    provider_not_configured: 'Not set up',
+    provider_degraded: 'Failing',
+    provider_circuit_open: 'Paused after repeated failures',
+    provider_budget_exhausted: 'Daily request budget used up',
+    provider_auth_failed: 'Credentials rejected - an operator must update the keys',
+    provider_failure_count: '{failures} of {total} requests failed',
     not_run: 'Not run',
     failures: 'failures',
     selection_completed: 'Selection completed in {ms} ms.',
@@ -150,6 +167,23 @@ const I18N = {
     scan_job_failed: '시장 스캔을 마치지 못했습니다: {reason}',
     scan_provider_blocked: '실시간 시장 데이터 제공자가 인증을 거부해 후보를 표시할 수 없습니다. 운영자가 제공자 키를 갱신해야 합니다.',
     provider_blocked_badge: 'fail-closed: 제공자 인증 실패',
+    data_providers: '데이터 제공자',
+    provider_health_loading: '데이터 제공자 상태를 확인하는 중입니다.',
+    provider_health_unavailable: '제공자 상태를 불러올 수 없습니다.',
+    run_alpaca_diagnostics: 'Alpaca 자격증명 점검',
+    running_diagnostics: '자격증명을 점검하는 중...',
+    diagnostics_ready: 'Alpaca 자격증명이 정상입니다. 실시간 시장 데이터를 쓸 수 있습니다.',
+    diagnostics_failed: 'Alpaca가 이 자격증명을 거부했습니다 ({classification}).',
+    diagnostics_next_actions: '다음에 할 일',
+    policy_fail_closed: '실데이터 없으면 후보 미노출',
+    policy_fallbacks: '설정된 대체 데이터 허용',
+    provider_ready: '정상',
+    provider_not_configured: '미설정',
+    provider_degraded: '실패 중',
+    provider_circuit_open: '반복 실패로 일시 중단',
+    provider_budget_exhausted: '일일 요청 한도 소진',
+    provider_auth_failed: '자격증명 거부됨 - 운영자가 키를 갱신해야 합니다',
+    provider_failure_count: '요청 {total}건 중 {failures}건 실패',
     not_run: '미실행',
     failures: '실패',
     selection_completed: '후보 계산이 {ms} ms 안에 완료되었습니다.',
@@ -574,11 +608,93 @@ async function loadWatchlist() {
   });
 }
 
+// The dashboard's headline feature depends on third-party market data. When a provider
+// stops working the scan fails closed and shows nothing, so the operations panel has to
+// say which provider is broken and what to do about it. These endpoints are secret-safe:
+// they report configuration state and error codes, never key values.
+const PROVIDER_STATUS_LABELS = {
+  ready: 'provider_ready',
+  not_configured: 'provider_not_configured',
+  degraded: 'provider_degraded',
+  circuit_open: 'provider_circuit_open',
+  budget_exhausted: 'provider_budget_exhausted'
+};
+
+function providerLooksAuthBlocked(entry) {
+  const text = `${entry.last_error_code || ''} ${entry.last_error_message || ''}`.toLowerCase();
+  return entry.last_status_code === 401 || entry.last_status_code === 403
+    || text.includes('unauthorized') || text.includes('forbidden') || text.includes('credential');
+}
+
+function providerTone(entry) {
+  if (entry.status === 'ready') return 'good';
+  if (entry.status === 'not_configured') return 'muted';
+  return 'bad';
+}
+
+function renderProviderHealth(health) {
+  const policy = document.getElementById('provider-policy');
+  policy.textContent = health.final_candidate_policy === 'fail_closed'
+    ? t('policy_fail_closed')
+    : t('policy_fallbacks');
+
+  const entries = Object.entries(health.providers || {});
+  const target = document.getElementById('provider-health');
+  if (!entries.length) {
+    target.innerHTML = `<div class="empty-state">${t('provider_health_unavailable')}</div>`;
+    return;
+  }
+  target.innerHTML = entries.map(([name, entry]) => {
+    const authBlocked = entry.status !== 'not_configured' && providerLooksAuthBlocked(entry);
+    const label = authBlocked ? t('provider_auth_failed') : t(PROVIDER_STATUS_LABELS[entry.status] || 'provider_degraded');
+    const detail = entry.total_failures
+      ? t('provider_failure_count', { failures: entry.total_failures, total: entry.total_requests })
+      : '';
+    return `
+      <div class="provider-row ${authBlocked ? 'bad' : providerTone(entry)}">
+        <span class="provider-name">${escapeHtml(name)}</span>
+        <span class="provider-state">${escapeHtml(label)}</span>
+        ${detail ? `<span class="provider-detail">${escapeHtml(detail)}</span>` : ''}
+      </div>`;
+  }).join('');
+}
+
+async function runAlpacaDiagnostics() {
+  const box = document.getElementById('alpaca-diagnostics');
+  const button = document.getElementById('alpaca-diagnostics-button');
+  box.hidden = false;
+  box.className = 'diagnostics';
+  box.textContent = t('running_diagnostics');
+  button.disabled = true;
+  try {
+    const result = await api('/api/provider-diagnostics/alpaca');
+    const actions = result.next_actions || [];
+    if (result.ready) {
+      box.className = 'diagnostics good';
+      box.textContent = t('diagnostics_ready');
+      return;
+    }
+    box.className = 'diagnostics bad';
+    box.innerHTML = `
+      <strong>${escapeHtml(t('diagnostics_failed', { classification: result.classification || 'unknown' }))}</strong>
+      ${actions.length ? `<p>${escapeHtml(t('diagnostics_next_actions'))}</p><ul>${
+        actions.map((action) => `<li>${escapeHtml(action)}</li>`).join('')
+      }</ul>` : ''}`;
+  } catch (error) {
+    box.className = 'diagnostics bad';
+    box.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function loadOps() {
-  const [readiness, failures] = await Promise.all([
+  const [readiness, failures, health] = await Promise.all([
     api('/api/saas-readiness'),
-    api('/api/failures')
+    api('/api/failures'),
+    api('/api/provider-health').catch(() => null)
   ]);
+  if (health) renderProviderHealth(health);
   state.failures = failures.items || [];
   document.getElementById('failure-count').textContent = `${failures.count} ${t('failures')}`;
   const opsState = document.getElementById('ops-state');
@@ -962,6 +1078,7 @@ document.getElementById('starter-research-button').addEventListener('click', see
 document.getElementById('scan-button').addEventListener('click', runScan);
 document.getElementById('select-button').addEventListener('click', runSelection);
 document.getElementById('refresh-button').addEventListener('click', bootstrap);
+document.getElementById('alpaca-diagnostics-button').addEventListener('click', runAlpacaDiagnostics);
 document.getElementById('detail-close').addEventListener('click', closeDetail);
 document.getElementById('detail-modal').addEventListener('click', (event) => {
   if (event.target.id === 'detail-modal') closeDetail();

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from io import BytesIO
 from pathlib import Path
+from unittest.mock import patch
 
 from vcb_alt.config import AppConfig
 from vcb_alt.db import add_watchlist, connect, init_db
@@ -138,6 +140,50 @@ class WebTests(unittest.TestCase):
             self.assertFalse(_is_authorized(_FakeHandler({}), config, "token=1234567890abcdef"))
             self.assertTrue(_is_authorized(_FakeHandler({"authorization": "Bearer 1234567890abcdef"}), config, ""))
             self.assertEqual(_auth_cookie_headers(_FakeHandler({}), config, "token=1234567890abcdef"), {})
+
+    def test_provider_panel_endpoints_stay_secret_safe(self) -> None:
+        """The operations panel renders these two payloads verbatim.
+
+        They must describe provider state without ever echoing a configured key.
+        """
+        secret_key = "ak-live-9Zq2Xr7Lp4Tn8Bd1"
+        secret_value = "sk-live-3Hv6Wm0Qy5Rc2Jf8"
+        with tempfile.TemporaryDirectory() as tmp:
+            base = make_config(Path(tmp))
+            config = AppConfig(
+                **{
+                    **base.__dict__,
+                    "external_api_enabled": True,
+                    "data_provider": "yahoo",
+                    "alpaca_api_key": secret_key,
+                    "alpaca_api_secret": secret_value,
+                    "finnhub_api_key": secret_value,
+                    "openai_api_key": secret_value,
+                }
+            )
+            health = handle_api(config, "GET", "/api/provider-health", "", None)
+            self.assertTrue(health.ok)
+            self.assertIn("providers", health.data)
+            self.assertIn("alpaca", health.data["providers"])
+            self.assertIn("status", health.data["providers"]["alpaca"])
+
+            # Stub the probe: with credentials present the endpoint would otherwise make
+            # real HTTP calls to Alpaca, which must never happen in a unit test.
+            unauthorized = {"ok": False, "status_code": 401, "message": "unauthorized"}
+            with patch("vcb_alt.market_universe._probe_alpaca_endpoint", return_value=unauthorized) as probe:
+                diagnostics = handle_api(config, "GET", "/api/provider-diagnostics/alpaca", "", None)
+            self.assertTrue(probe.called)
+            self.assertTrue(diagnostics.ok)
+            self.assertFalse(diagnostics.data["ready"])
+            self.assertIn("classification", diagnostics.data)
+            self.assertIn("next_actions", diagnostics.data)
+            # Configured-ness may be reported; the values themselves may not.
+            self.assertTrue(diagnostics.data["environment"]["key_configured"])
+
+            for payload in (health.data, diagnostics.data):
+                rendered = json.dumps(payload, default=str)
+                self.assertNotIn(secret_key, rendered)
+                self.assertNotIn(secret_value, rendered)
 
     def test_shared_token_gate_and_tenant_paths_agree(self) -> None:
         """The auth gate and the rate limiter share one list of tenant paths.
