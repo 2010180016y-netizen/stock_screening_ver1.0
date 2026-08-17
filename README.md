@@ -284,25 +284,33 @@ The detail page shows a five-year daily price/volume chart when the provider sup
 
 Legal and risk draft documents:
 
-- [Terms draft](TERMS.md)
-- [Privacy notice draft](PRIVACY.md)
-- [Risk disclosure draft](RISK_DISCLOSURE.md)
+- [Terms draft](docs/TERMS.md)
+- [Privacy notice draft](docs/PRIVACY.md)
+- [Risk disclosure draft](docs/RISK_DISCLOSURE.md)
 
 These drafts are operational placeholders and require legal review before public, paid, or unrestricted external release.
 
+## Repository Layout
+
+Reference documentation lives in [docs/](docs). The repository root keeps only the five
+files needed to start working: this README, [CHANGELOG.md](CHANGELOG.md),
+[SETUP.md](SETUP.md), [TESTING.md](TESTING.md), and
+[RELEASE_DECISION.md](RELEASE_DECISION.md) — the authoritative statement of what is and
+is not ready to ship. Implementation handoff notes are in [codex_handoff/](codex_handoff).
+
 ## Research And Planning
 
-- [Deep system research](research.md): current architecture, runtime flow, provider behavior, scoring, web/API, operations, risks, and scaling constraints.
-- [Operator trial guide](OPERATOR_TRIAL_GUIDE.md): owner pre-user usage URL, workflow checklist, provider mode, and public-launch blockers.
-- [Provider keys setup](PROVIDER_KEYS_SETUP.md): safe Vercel/local setup for Alpaca, Finnhub, SEC, and OpenAI keys.
-- [OAuth/MFA/RBAC plan](AUTH_MFA_RBAC_PLAN.md): auth hardening and role matrix before unrestricted external release.
-- [Monitoring and alerting plan](MONITORING_ALERTING_PLAN.md): operational dashboards, alerts, and health-report tooling.
-- [Neon backup/restore drill](NEON_BACKUP_RESTORE_DRILL.md): staging-first recovery drill and evidence checklist.
-- [Legal review packet](LEGAL_REVIEW_PACKET.md): counsel-facing launch review checklist and official reference links.
-- [Feature 00 implementation plan](plan.md): input-based/keyset paging plan for list APIs without SQL `OFFSET`.
-- [QA report](QA_REPORT.md): latest executed verification results.
+- [Deep system research](docs/research.md): current architecture, runtime flow, provider behavior, scoring, web/API, operations, risks, and scaling constraints.
+- [Operator trial guide](docs/OPERATOR_TRIAL_GUIDE.md): owner pre-user usage URL, workflow checklist, provider mode, and public-launch blockers.
+- [Provider keys setup](docs/PROVIDER_KEYS_SETUP.md): safe Vercel/local setup for Alpaca, Finnhub, SEC, and OpenAI keys.
+- [OAuth/MFA/RBAC plan](docs/AUTH_MFA_RBAC_PLAN.md): auth hardening and role matrix before unrestricted external release.
+- [Monitoring and alerting plan](docs/MONITORING_ALERTING_PLAN.md): operational dashboards, alerts, and health-report tooling.
+- [Neon backup/restore drill](docs/NEON_BACKUP_RESTORE_DRILL.md): staging-first recovery drill and evidence checklist.
+- [Legal review packet](docs/LEGAL_REVIEW_PACKET.md): counsel-facing launch review checklist and official reference links.
+- [Feature 00 implementation plan](docs/plan.md): input-based/keyset paging plan for list APIs without SQL `OFFSET`.
+- [QA report](docs/QA_REPORT.md): latest executed verification results.
 - [Release decision](RELEASE_DECISION.md): current owner-trial readiness and remaining public-SaaS blockers.
-- [SaaS implementation plan](SAAS_IMPLEMENTATION_PLAN.md): future SaaS hardening path.
+- [SaaS implementation plan](docs/SAAS_IMPLEMENTATION_PLAN.md): future SaaS hardening path.
 - [PostgreSQL migration](migrations/postgres/001_saas_core.sql): target SaaS tenant/user/session/watchlist/evaluation/rate-limit/job schema.
 
 ## Known Limitations
@@ -325,13 +333,13 @@ This repository now includes a target design and a production control-plane smok
 
 Start here:
 
-- [1000-user architecture](SAAS_1000_USER_ARCHITECTURE.md)
-- [Multi-tenant data model](MULTI_TENANT_DATA_MODEL.md)
-- [API contract](API_CONTRACT_V1.md)
-- [Security and compliance plan](SECURITY_COMPLIANCE_1000_USER.md)
-- [Operations plan](OPERATIONS_1000_USER.md)
-- [Migration plan](SAAS_MIGRATION_PLAN.md)
-- [Load test plan](LOAD_TEST_PLAN.md)
+- [1000-user architecture](docs/SAAS_1000_USER_ARCHITECTURE.md)
+- [Multi-tenant data model](docs/MULTI_TENANT_DATA_MODEL.md)
+- [API contract](docs/API_CONTRACT_V1.md)
+- [Security and compliance plan](docs/SECURITY_COMPLIANCE_1000_USER.md)
+- [Operations plan](docs/OPERATIONS_1000_USER.md)
+- [Migration plan](docs/SAAS_MIGRATION_PLAN.md)
+- [Load test plan](docs/LOAD_TEST_PLAN.md)
 - `tools/queue_load_test.py`: local queue-backed 1000-user scan simulation.
 - `tools/host_queue_load_test.py`: hosted auth/watchlist/queue smoke test.
 

@@ -1,7 +1,7 @@
 """Fail the build when a live-looking secret is committed to the repository.
 
 This project has already leaked a production access token through documentation once
-(see the 2026-08-17 entry in RELEASE_DECISION.md). Placeholder values are expected and
+(see the 2026-08-17 entry in RELEASE_DECISION.md at the repository root). Placeholders are
 allowed; anything that looks like a real key, token, or connection string is not.
 
 Usage:

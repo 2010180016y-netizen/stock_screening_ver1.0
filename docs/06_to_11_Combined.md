@@ -492,13 +492,15 @@ python -m vcb_alt morning
 
 ## Documentation
 
-- [PRD](product_docs/01_PRD.md) — Product Requirements
-- [Tech Architecture](product_docs/02_Tech_Architecture.md)
-- [Data Schema](product_docs/03_Data_Schema.md)
-- [API Spec](product_docs/04_API_Spec.md)
-- [Algorithm Spec](product_docs/05_Algorithm_Spec.md) ← **핵심**
-- [Operation Manual](product_docs/06_Deployment_Operation.md)
-- [Roadmap](product_docs/10_Roadmap.md)
+- [PRD](01_PRD.md) — Product Requirements
+- [Tech Architecture](02_Tech_Architecture.md)
+- [Data Schema](03_Data_Schema.md)
+- [API Spec](04_API_Spec.md)
+- [Algorithm Spec](05_Algorithm_Spec.md) ← **핵심**
+- Operation Manual and Roadmap: sections 06 and 10 of this document.
+
+> These links previously pointed at a `product_docs/` directory that does not exist in
+> this repository. Repointed to the actual files during the 2026-08 documentation move.
 
 ## License
 
