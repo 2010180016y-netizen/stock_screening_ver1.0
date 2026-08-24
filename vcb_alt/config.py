@@ -263,8 +263,8 @@ def load_config(root_dir: Path | None = None) -> AppConfig:
     if scan_mode not in {"market_universe", "watchlist"}:
         raise ValidationError("SCAN_MODE must be one of: market_universe, watchlist.")
     market_universe_provider = get("MARKET_UNIVERSE_PROVIDER", "auto").lower()
-    if market_universe_provider not in {"auto", "alpaca", "csv", "sample"}:
-        raise ValidationError("MARKET_UNIVERSE_PROVIDER must be one of: auto, alpaca, csv, sample.")
+    if market_universe_provider not in {"auto", "alpaca", "csv", "sample", "watchlist"}:
+        raise ValidationError("MARKET_UNIVERSE_PROVIDER must be one of: auto, alpaca, csv, watchlist, sample.")
     market_universe_max_symbols = _parse_positive_int(
         get("MARKET_UNIVERSE_MAX_SYMBOLS", "5000"),
         "MARKET_UNIVERSE_MAX_SYMBOLS",

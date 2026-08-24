@@ -264,9 +264,10 @@ class WebTests(unittest.TestCase):
         app_js = _served("app.js")
         self.assertIn("Market-wide discovery", index_html)
         self.assertIn("Scan full market / latest candidates", index_html)
-        self.assertIn("Optional manual research", index_html)
-        self.assertIn("Secondary drawer", index_html)
-        self.assertIn("never seed candidate output automatically", index_html)
+        # The sidebar now selects what the scan looks at, so the copy must say so.
+        self.assertIn("Your scan list", index_html)
+        self.assertIn("Used when no market universe is configured", index_html)
+        self.assertIn("this is how you choose what the scan looks at", index_html)
         self.assertIn('id="starter-research-button"', index_html)
         self.assertIn('class="panel watchlist-panel secondary-research-panel"', index_html)
         self.assertIn('id="scan-freshness"', index_html)

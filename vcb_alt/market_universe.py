@@ -13,7 +13,8 @@ from pathlib import Path
 from typing import Any
 
 from .config import AppConfig
-from .errors import AppError, ValidationError
+from .errors import AppError, NotFoundError, ValidationError
+from .db import list_watchlist
 from .models import EvaluationResult, PortfolioSelection, StockSnapshot
 from .portfolio import select_portfolio
 from .provider_resilience import ProviderFailure, provider_request_json, provider_request_text
@@ -111,7 +112,15 @@ def scan_market_universe(
     universe_limit: int | None = None,
     prefilter_limit: int | None = None,
     max_positions: int = 3,
+    conn: Any | None = None,
+    cached_only: bool = False,
 ) -> MarketScanResult:
+    """Scan the configured universe and return scored candidates plus a selection.
+
+    conn lets the universe come from the stored watchlist. cached_only returns the last
+    scan without doing the work again, which is what rebuilding a selection needs: it
+    re-reads a finished scan instead of repeating a provider-heavy sweep.
+    """
     cache_path = _market_scan_report_cache_path(config, universe_limit, prefilter_limit, max_positions)
     cached = _read_fresh_cache(cache_path, config.intraday_cache_ttl_seconds)
     if cached is not None:
@@ -128,9 +137,14 @@ def scan_market_universe(
             cache_path.unlink(missing_ok=True)
             raise
 
+    if cached_only:
+        raise NotFoundError(
+            "No recent market scan is available to rebuild a selection from. Run a market scan first."
+        )
+
     start = time.perf_counter()
     limit = min(universe_limit or config.market_universe_max_symbols, config.market_universe_max_symbols)
-    entries, universe_meta = load_market_universe(config, limit=limit)
+    entries, universe_meta = load_market_universe(config, limit=limit, conn=conn)
     candidates, prefilter_meta = prefilter_market_candidates(config, entries, limit=prefilter_limit)
     failures: list[dict[str, Any]] = []
 
@@ -196,7 +210,12 @@ def market_scan_report_has_live_data(report: MarketScanResult | dict[str, Any]) 
     return all(isinstance(item, dict) and str(item.get("source") or "").startswith("alpaca:") for item in items)
 
 
-def load_market_universe(config: AppConfig, *, limit: int | None = None) -> tuple[list[UniverseEntry], dict[str, Any]]:
+def load_market_universe(
+    config: AppConfig,
+    *,
+    limit: int | None = None,
+    conn: Any | None = None,
+) -> tuple[list[UniverseEntry], dict[str, Any]]:
     warnings: list[str] = []
     source = config.market_universe_provider
     entries: list[UniverseEntry] = []
@@ -214,6 +233,15 @@ def load_market_universe(config: AppConfig, *, limit: int | None = None) -> tupl
         entries = _load_csv_universe(config)
         if entries:
             source = "csv"
+
+    # Before falling back to fabricated sample tickers, scan what the operator actually
+    # put in the watchlist. The sidebar used to have no effect on the scan at all.
+    if not entries and source in {"auto", "watchlist"} and conn is not None:
+        entries = _load_watchlist_universe(conn)
+        if entries:
+            source = "watchlist"
+        elif source == "watchlist":
+            warnings.append("The watchlist is empty, so there is nothing to scan.")
 
     if not entries:
         if config.market_scan_requires_live_data:
@@ -583,6 +611,29 @@ def _request_alpaca_assets(config: AppConfig, query: str) -> str:
     if isinstance(last_error, urllib.error.HTTPError):
         raise ValidationError(_alpaca_error_message(last_error)) from last_error
     raise ValidationError(f"Alpaca assets request failed: {last_error}")
+
+
+def _load_watchlist_universe(conn: Any) -> list[UniverseEntry]:
+    """Use the stored watchlist as the scan universe.
+
+    Adding a ticker in the sidebar previously changed nothing about the scan, because the
+    market universe only ever came from Alpaca, an operator CSV, or sample data. This is
+    the local/global watchlist; per-tenant universes are a separate design question,
+    because the market scan snapshot is shared across tenants.
+    """
+    try:
+        rows = list_watchlist(conn)
+    except AppError:
+        return []
+    entries: list[UniverseEntry] = []
+    for row in rows:
+        ticker = str(row.get("ticker") or "").strip().upper()
+        if not ticker:
+            continue
+        entries.append(
+            UniverseEntry(ticker=validate_ticker(ticker), name=ticker, exchange="watchlist", source="watchlist")
+        )
+    return entries
 
 
 def _load_csv_universe(config: AppConfig) -> list[UniverseEntry]:

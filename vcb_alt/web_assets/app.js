@@ -39,10 +39,10 @@ const I18N = {
     run_scan: 'Scan full market / latest candidates',
     select_final: 'Rebuild selected set',
     refresh: 'Refresh status',
-    watchlist: 'Optional manual research',
-    watchlist_drawer_label: 'Secondary drawer',
-    watchlist_help: 'Manual watchlist notes are separate from the market-wide discovery result '
-      + 'and never seed candidate output automatically.',
+    watchlist: 'Your scan list',
+    watchlist_drawer_label: 'Used when no market universe is configured',
+    watchlist_help: 'Tickers added here are scanned when no Alpaca universe or operator CSV is '
+      + 'configured, so this is how you choose what the scan looks at.',
     starter_research: 'Add optional starter research list',
     optional_research: 'Optional research list',
     operations: 'Operations',
@@ -98,6 +98,8 @@ const I18N = {
     no_eligible: 'No eligible candidates. Check live data coverage or run again after data refresh.',
     allocation_guide: 'Research size reference',
     scanning: 'Scanning the market...',
+    scan_coverage: 'Ranked {scanned} of {total} symbols from {source}.',
+    scan_partial: 'Ranked {scanned} of {total} symbols before the time limit. {skipped} left - scan again to continue; results so far are cached.',
     scan_ended_without_result: 'The scan ended without a result. Check the data providers in Operations, then scan again.',
     scan_snapshot_pending_empty: 'The market snapshot is still being prepared. Press Refresh status in a moment.',
     no_excluded: 'Nothing was set aside for monitoring in this scan.',
@@ -135,9 +137,9 @@ const I18N = {
     run_scan: '시장 전체 스캔/최신 후보 확인',
     select_final: '후보 세트 다시 계산',
     refresh: '상태 새로고침',
-    watchlist: '보조 수동 연구',
-    watchlist_drawer_label: '보조 패널',
-    watchlist_help: '수동 목록은 시장 전체 탐색 결과와 별개입니다. 후보 결과로 자동 시딩되지 않습니다.',
+    watchlist: '스캔 대상 목록',
+    watchlist_drawer_label: '시장 유니버스 미설정 시 사용',
+    watchlist_help: 'Alpaca 유니버스나 운영자 CSV가 없을 때 여기 추가한 종목을 스캔합니다. 스캔 대상을 정하는 곳입니다.',
     starter_research: '선택적 시작 연구 목록 추가',
     optional_research: '보조 연구 목록',
     operations: '운영 상태',
@@ -193,6 +195,8 @@ const I18N = {
     no_eligible: '조건을 충족하는 후보가 없습니다. 데이터 커버리지를 확인하거나 갱신 후 다시 실행하세요.',
     allocation_guide: '검토 비중 참고',
     scanning: '시장을 스캔하는 중...',
+    scan_coverage: '{source}에서 {total}개 중 {scanned}개 종목을 평가했습니다.',
+    scan_partial: '시간 제한으로 {total}개 중 {scanned}개까지 평가했습니다. {skipped}개가 남았습니다 - 다시 스캔하면 이어서 진행되며, 지금까지 결과는 캐시됩니다.',
     scan_ended_without_result: '스캔이 결과 없이 끝났습니다. 운영 상태에서 데이터 제공자를 확인한 뒤 다시 스캔하세요.',
     scan_snapshot_pending_empty: '시장 스냅샷이 아직 준비 중입니다. 잠시 후 상태 새로고침을 눌러 주세요.',
     no_excluded: '이번 스캔에서 모니터링으로 분류된 종목이 없습니다.',
@@ -812,9 +816,11 @@ function renderScanReport(data, { notice } = {}) {
   }
   updateDataStatus(data.items, data.failures || []);
   updateDiscoverySummary(data);
-  showNotice(notice || (state.lang === 'ko'
+  const coverage = scanCoverageMessage(data);
+  const done = notice || (state.lang === 'ko'
     ? `시장 전체 스캔이 ${data.elapsed_ms} ms 안에 완료되었습니다.`
-    : `Market scan completed in ${data.elapsed_ms} ms.`));
+    : `Market scan completed in ${data.elapsed_ms} ms.`);
+  showNotice(coverage ? `${done} ${coverage}` : done);
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -969,6 +975,22 @@ async function refreshAll() {
 
 async function bootstrap() {
   await refreshAll();
+}
+
+// After a scan the user should be able to tell how much of their universe was actually
+// looked at. The end-of-day path stops on a time budget, so "3 candidates" alone hides
+// whether that came from 3 symbols or 300.
+function scanCoverageMessage(data = {}) {
+  const prefilter = data.prefilter || {};
+  const universe = data.universe || {};
+  const scanned = Number(prefilter.scanned_symbols || 0);
+  const total = Number(universe.count || 0);
+  if (!scanned || !total) return '';
+  const skipped = Number(prefilter.skipped_symbols || 0);
+  if (prefilter.time_budget_exhausted && skipped > 0) {
+    return t('scan_partial', { scanned, total, skipped });
+  }
+  return t('scan_coverage', { scanned, total, source: translateSource(universe.source || prefilter.source || '') });
 }
 
 function updateDiscoverySummary(data = {}) {

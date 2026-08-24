@@ -8,7 +8,7 @@ VCB-Alt scans a configured US-equity market universe, prefilters live/near-live 
 
 - Local SQLite setup with `init-db`
 - Market-universe scan mode for all-market discovery
-- Watchlist add/list/remove/seed commands for manual research lists
+- Watchlist add/list/remove/seed commands, which also serve as the scan universe when no Alpaca universe or operator CSV is configured
 - Single ticker evaluation with validation and risk warnings
 - Market scan with empty/success/error-safe states
 - Manual CSV data provider for operator-supplied real snapshots

@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from vcb_alt.config import AppConfig
-from vcb_alt.errors import ValidationError
+from vcb_alt.errors import NotFoundError, ValidationError
 from vcb_alt import market_universe, providers
 from vcb_alt.market_universe import (
     UNIVERSE_CACHE_VERSION,
@@ -408,3 +408,49 @@ class OperatorCsvPathTests(unittest.TestCase):
             (legacy / "universe.csv").write_text("ticker" + chr(10), encoding="utf-8")
             config = _prefilter_config(root, data_dir=root / "not-here")
             self.assertEqual(market_universe.market_universe_path(config), legacy / "universe.csv")
+
+
+class WatchlistUniverseTests(unittest.TestCase):
+    """Adding a ticker in the sidebar used to change nothing about the scan."""
+
+    def _config(self, root: Path, **overrides: object) -> AppConfig:
+        return _prefilter_config(root, scan_mode="market_universe", **overrides)
+
+    def test_watchlist_becomes_the_universe(self) -> None:
+        from vcb_alt.db import add_watchlist, connect, init_db
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self._config(Path(tmp))
+            with connect(config) as conn:
+                init_db(conn)
+                add_watchlist(conn, ["AAPL", "MSFT"])
+                entries, meta = market_universe.load_market_universe(config, conn=conn)
+
+            self.assertEqual(meta["source"], "watchlist")
+            self.assertEqual(sorted(entry.ticker for entry in entries), ["AAPL", "MSFT"])
+
+    def test_sample_fallback_only_when_nothing_else_exists(self) -> None:
+        from vcb_alt.db import connect, init_db
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self._config(Path(tmp))
+            with connect(config) as conn:
+                init_db(conn)
+                _, meta = market_universe.load_market_universe(config, conn=conn)
+            self.assertEqual(meta["source"], "sample")
+
+    def test_without_a_connection_behaviour_is_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self._config(Path(tmp))
+            _, meta = market_universe.load_market_universe(config)
+            self.assertEqual(meta["source"], "sample")
+
+
+class CachedSelectionTests(unittest.TestCase):
+    def test_rebuilding_a_selection_without_a_scan_says_so(self) -> None:
+        """Rebuild used to repeat the whole provider-heavy sweep instead of reusing it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            config = _prefilter_config(Path(tmp), scan_mode="market_universe")
+            with self.assertRaises(NotFoundError) as caught:
+                market_universe.scan_market_universe(config, cached_only=True)
+            self.assertIn("Run a market scan first", str(caught.exception))

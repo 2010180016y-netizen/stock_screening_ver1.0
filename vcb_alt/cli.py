@@ -237,7 +237,7 @@ def dispatch(args: argparse.Namespace) -> OperationResult:
 
         if args.command == "select":
             if config.scan_mode == "market_universe":
-                report = scan_market_universe(config, max_positions=args.max_positions)
+                report = scan_market_universe(config, conn=conn, max_positions=args.max_positions)
                 for item in report.evaluations:
                     save_evaluation(conn, item)
                 log_operation(
@@ -337,7 +337,7 @@ def _scan_watchlist(config: Any, conn: Any, *, command: str, limit: int | None =
 
 
 def _scan_market_universe(config: Any, conn: Any, *, limit: int | None = None) -> OperationResult:
-    report = scan_market_universe(config, universe_limit=limit)
+    report = scan_market_universe(config, conn=conn, universe_limit=limit)
     for item in report.evaluations:
         save_evaluation(conn, item)
     status = "success" if not report.failures else "partial_success"

@@ -209,7 +209,8 @@ def handle_api(
                 raise ValidationError("User authentication is not enabled.")
             user = require_user(conn, bearer_token(headers or {}))
             if config.scan_mode == "market_universe":
-                return _scan_user(config, conn, user, message="Selection completed.")
+                # Rebuild from the finished scan instead of running it again.
+                return _scan_user(config, conn, user, message="Selection completed.", cached_only=True)
             evaluations, failures, elapsed_ms = _evaluate_user_watchlist(config, conn, user)
             selection = select_portfolio(evaluations)
             return OperationResult.success(
@@ -292,7 +293,8 @@ def handle_api(
             return _scan(config, conn)
         if method == "GET" and path == "/api/select":
             if config.scan_mode == "market_universe":
-                return _scan(config, conn, message="Selection completed.")
+                # Rebuild from the finished scan instead of running it again.
+                return _scan(config, conn, message="Selection completed.", cached_only=True)
             evaluations, failures, elapsed_ms = _evaluate_watchlist(config, conn, "web select")
             selection = select_portfolio(evaluations)
             log_operation(
@@ -315,9 +317,9 @@ def handle_api(
     raise ValidationError("API route not found.")
 
 
-def _scan(config: AppConfig, conn: Any, *, message: str = "Scan completed.") -> OperationResult:
+def _scan(config: AppConfig, conn: Any, *, message: str = "Scan completed.", cached_only: bool = False) -> OperationResult:
     if config.scan_mode == "market_universe":
-        report = scan_market_universe(config)
+        report = scan_market_universe(config, conn=conn, cached_only=cached_only)
         for result in report.evaluations:
             save_evaluation(conn, result)
         log_operation(
@@ -353,7 +355,14 @@ def _scan(config: AppConfig, conn: Any, *, message: str = "Scan completed.") -> 
     )
 
 
-def _scan_user(config: AppConfig, conn: Any, user: dict[str, Any], *, message: str = "Scan completed.") -> OperationResult:
+def _scan_user(
+    config: AppConfig,
+    conn: Any,
+    user: dict[str, Any],
+    *,
+    message: str = "Scan completed.",
+    cached_only: bool = False,
+) -> OperationResult:
     if config.scan_mode == "market_universe":
         if config.production_saas_mode and config.scan_queue_enabled:
             outcome = enqueue_or_get_market_scan_snapshot(config, conn, user)
@@ -362,7 +371,7 @@ def _scan_user(config: AppConfig, conn: Any, user: dict[str, Any], *, message: s
             return OperationResult.success(
                 "Market scan snapshot queued.", public_market_scan_outcome(outcome), status_code=202
             )
-        report = scan_market_universe(config)
+        report = scan_market_universe(config, conn=conn, cached_only=cached_only)
         for result in report.evaluations:
             save_user_evaluation(conn, user, result, commit=False)
         conn.commit()
