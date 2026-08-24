@@ -206,7 +206,7 @@ def get_snapshot(config: AppConfig, ticker_value: str) -> StockSnapshot:
     if config.data_provider == "sample":
         return get_sample_snapshot(ticker)
     if config.data_provider == "manual":
-        return get_manual_snapshot(config.root_dir, ticker)
+        return get_manual_snapshot(config, ticker)
     if config.data_provider == "stooq" and config.external_api_enabled:
         return get_stooq_snapshot(config, ticker)
     if config.data_provider in {"yahoo", "yahoo_chart"} and config.external_api_enabled:
@@ -221,7 +221,7 @@ def provider_status(config: AppConfig) -> dict[str, Any]:
     capabilities = PROVIDER_CAPABILITIES.get(config.data_provider, {})
     research_capabilities = RESEARCH_PROVIDER_CAPABILITIES.get(config.research_data_provider, {})
     warnings: list[str] = []
-    enrichment_path = enrichment_snapshot_path(config.root_dir)
+    enrichment_path = enrichment_snapshot_path(config)
     enrichment_available = enrichment_path.exists()
     if config.data_provider in {"yahoo", "yahoo_chart", "stooq"} and not config.external_api_enabled:
         warnings.append("External API access is disabled; this provider cannot fetch fresh market data.")
@@ -289,17 +289,33 @@ def provider_status(config: AppConfig) -> dict[str, Any]:
     }
 
 
-def manual_snapshot_path(root_dir: Path) -> Path:
-    return root_dir / "data" / "snapshots.csv"
+def _operator_csv_path(config: AppConfig, filename: str) -> Path:
+    """Resolve an operator-maintained CSV.
+
+    These files used to be read only from root_dir/data while every cache resolves under
+    VCB_ALT_DATA_DIR, so an operator who set DATA_DIR and put the file there got a silent
+    fallback - no universe, or enrichment that never applied and left data coverage below
+    the selection gate with no explanation. The default layout keeps both paths identical;
+    the legacy location still works for existing installs.
+    """
+    preferred = config.data_dir / filename
+    if preferred.exists():
+        return preferred
+    legacy = config.root_dir / "data" / filename
+    return legacy if legacy.exists() else preferred
 
 
-def enrichment_snapshot_path(root_dir: Path) -> Path:
-    return root_dir / "data" / "enrichment.csv"
+def manual_snapshot_path(config: AppConfig) -> Path:
+    return _operator_csv_path(config, "snapshots.csv")
 
 
-def get_manual_snapshot(root_dir: Path, ticker_value: str) -> StockSnapshot:
+def enrichment_snapshot_path(config: AppConfig) -> Path:
+    return _operator_csv_path(config, "enrichment.csv")
+
+
+def get_manual_snapshot(config: AppConfig, ticker_value: str) -> StockSnapshot:
     ticker = validate_ticker(ticker_value)
-    snapshots = _load_manual_snapshots(str(manual_snapshot_path(root_dir)))
+    snapshots = _load_manual_snapshots(str(manual_snapshot_path(config)))
     if ticker not in snapshots:
         raise NotFoundError(
             f"No manual snapshot found for {ticker}. Add it to data/snapshots.csv or use VCB_ALT_DATA_PROVIDER=sample."
@@ -337,7 +353,7 @@ def apply_research_enrichment(config: AppConfig, snapshot: StockSnapshot) -> Sto
         if values:
             enriched = _apply_enrichment_values(enriched, values, "finnhub")
     if config.research_data_provider in {"csv", "finnhub_csv"}:
-        rows = _load_enrichment_rows(str(enrichment_snapshot_path(config.root_dir)))
+        rows = _load_enrichment_rows(str(enrichment_snapshot_path(config)))
         values = rows.get(snapshot.ticker)
         if values:
             enriched = _apply_enrichment_values(enriched, values, str(values.get("enrichment_source") or "data/enrichment.csv"))
@@ -766,7 +782,7 @@ def _first_number(mapping: dict[str, Any], keys: list[str]) -> float:
 
 
 def apply_csv_enrichment(config: AppConfig, snapshot: StockSnapshot) -> StockSnapshot:
-    rows = _load_enrichment_rows(str(enrichment_snapshot_path(config.root_dir)))
+    rows = _load_enrichment_rows(str(enrichment_snapshot_path(config)))
     values = rows.get(snapshot.ticker)
     if not values:
         return snapshot

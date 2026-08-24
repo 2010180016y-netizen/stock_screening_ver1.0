@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import tempfile
+import time
 import unittest
 import urllib.error
 from pathlib import Path
@@ -10,7 +11,7 @@ from unittest.mock import patch
 
 from vcb_alt.config import AppConfig
 from vcb_alt.errors import ValidationError
-from vcb_alt import market_universe
+from vcb_alt import market_universe, providers
 from vcb_alt.market_universe import (
     UNIVERSE_CACHE_VERSION,
     UniverseEntry,
@@ -286,7 +287,9 @@ class PrefilterProviderTests(unittest.TestCase):
             self.assertEqual(candidates[0].spread_bps, 0.0)
             self.assertIn("end-of-day", meta["warnings"][0].lower())
             # The scoring pipeline must accept what this path produces.
-            self.assertEqual(market_universe._snapshot_from_prefilter(candidates[0]).ticker, "NVDA")
+            with patch.object(market_universe, "get_snapshot") as snapshot:
+                market_universe._snapshot_for_candidate(config, candidates[0])
+            snapshot.assert_called_once_with(config, "NVDA")
 
     def test_yahoo_prefilter_caps_the_number_of_symbols_it_fetches(self) -> None:
         """One request per symbol, so an unbounded universe would be a request storm."""
@@ -317,3 +320,91 @@ class PrefilterProviderTests(unittest.TestCase):
             self.assertEqual(meta["source"], "unavailable")
             self.assertIn("Alpaca", meta["warnings"][0])
             self.assertIn("VCB_ALT_MARKET_PREFILTER_PROVIDER=yahoo", meta["warnings"][0])
+
+
+class PrefilterSnapshotTests(unittest.TestCase):
+    def test_end_of_day_candidates_use_the_provider_snapshot_path(self) -> None:
+        """A hand-built snapshot loses the trend score and is labelled stale intraday.
+
+        That scored the momentum archetype at zero, so no end-of-day candidate could ever
+        be selected however strong its move was.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            config = _prefilter_config(Path(tmp), data_provider="yahoo", external_api_enabled=True)
+            eod = market_universe.PrefilterCandidate(
+                ticker="NVDA", company_name="NVIDIA", exchange="NASDAQ", latest_price=112.0,
+                previous_close=100.0, intraday_change_pct=12.0, intraday_volume=4_000_000.0,
+                breakout_volume_ratio=4.0, spread_bps=0.0, prefilter_score=95,
+                source="yahoo:eod", data_as_of="2026-08-22", freshness_seconds=86400.0,
+            )
+            with patch.object(market_universe, "get_snapshot") as snapshot:
+                market_universe._snapshot_for_candidate(config, eod)
+            snapshot.assert_called_once_with(config, "NVDA")
+
+    def test_intraday_candidates_still_convert_directly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = _prefilter_config(Path(tmp))
+            intraday = market_universe.PrefilterCandidate(
+                ticker="NVDA", company_name="NVIDIA", exchange="NASDAQ", latest_price=112.0,
+                previous_close=100.0, intraday_change_pct=12.0, intraday_volume=4_000_000.0,
+                breakout_volume_ratio=4.0, spread_bps=2.0, prefilter_score=95,
+                source="alpaca:iex", data_as_of="2026-08-22T13:00:00Z", freshness_seconds=30.0,
+            )
+            with patch.object(market_universe, "get_snapshot") as snapshot:
+                built = market_universe._snapshot_for_candidate(config, intraday)
+            snapshot.assert_not_called()
+            self.assertEqual(built.source, "alpaca:iex")
+
+    def test_prefilter_stops_at_the_time_budget(self) -> None:
+        """One request per symbol overruns any serverless execution limit unbounded."""
+        with tempfile.TemporaryDirectory() as tmp:
+            config = _prefilter_config(
+                Path(tmp),
+                data_provider="yahoo",
+                external_api_enabled=True,
+                prefilter_time_budget_seconds=0.05,
+            )
+            entries = [
+                UniverseEntry(ticker=ticker, name=ticker, exchange="NASDAQ", source="csv")
+                for ticker in ("AAPL", "NVDA", "KO")
+            ]
+
+            def slow_history(_config: object, ticker: str, years: int = 1) -> dict[str, object]:
+                time.sleep(0.04)
+                return _fake_history(_config, ticker, years)
+
+            with patch.object(market_universe, "get_price_history", side_effect=slow_history):
+                _, meta = prefilter_market_candidates(config, entries)
+
+            self.assertTrue(meta["time_budget_exhausted"])
+            self.assertLess(meta["scanned_symbols"], len(entries))
+            self.assertEqual(meta["skipped_symbols"], len(entries) - meta["scanned_symbols"])
+            self.assertTrue(any("time budget" in warning for warning in meta["warnings"]))
+
+
+class OperatorCsvPathTests(unittest.TestCase):
+    """These files used to resolve only under root_dir, so setting DATA_DIR and putting
+    them there produced a silent fallback: no universe, and enrichment that never applied.
+    """
+
+    def test_operator_csvs_resolve_from_the_data_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data_dir = root / "elsewhere"
+            data_dir.mkdir()
+            config = _prefilter_config(root, data_dir=data_dir)
+            for name in ("universe.csv", "enrichment.csv", "snapshots.csv"):
+                (data_dir / name).write_text("ticker" + chr(10), encoding="utf-8")
+
+            self.assertEqual(market_universe.market_universe_path(config), data_dir / "universe.csv")
+            self.assertEqual(providers.enrichment_snapshot_path(config), data_dir / "enrichment.csv")
+            self.assertEqual(providers.manual_snapshot_path(config), data_dir / "snapshots.csv")
+
+    def test_legacy_root_location_still_works(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            legacy = root / "data"
+            legacy.mkdir()
+            (legacy / "universe.csv").write_text("ticker" + chr(10), encoding="utf-8")
+            config = _prefilter_config(root, data_dir=root / "not-here")
+            self.assertEqual(market_universe.market_universe_path(config), legacy / "universe.csv")

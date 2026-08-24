@@ -90,8 +90,19 @@ class MarketScanResult:
         }
 
 
-def market_universe_path(root_dir: Path) -> Path:
-    return root_dir / "data" / "universe.csv"
+def market_universe_path(config: AppConfig) -> Path:
+    """Where the operator-supplied universe lives.
+
+    Every other data file resolves under VCB_ALT_DATA_DIR, but this one used to be read
+    only from root_dir/data, so setting DATA_DIR and putting the file there produced a
+    silent "no universe available" fallback to sample data. The default layout keeps both
+    the same; the legacy location is still honoured for existing installs.
+    """
+    preferred = config.data_dir / "universe.csv"
+    if preferred.exists():
+        return preferred
+    legacy = config.root_dir / "data" / "universe.csv"
+    return legacy if legacy.exists() else preferred
 
 
 def scan_market_universe(
@@ -324,10 +335,22 @@ def _yahoo_prefilter_candidates(
     the final selection.
     """
     cap = max(1, min(config.yahoo_prefilter_max_symbols, len(entries)))
-    scanned = entries[:cap]
+    eligible = entries[:cap]
+    # One request per symbol at roughly a second each, so an unbounded loop overruns any
+    # serverless execution limit long before it finishes a large universe. Stop on the
+    # clock and report how far it got rather than being killed mid-request.
+    # Config already rejects a non-positive budget, so honour the value as configured.
+    budget_seconds = float(config.prefilter_time_budget_seconds)
+    started = time.monotonic()
+    budget_exhausted = False
     candidates: list[PrefilterCandidate] = []
     failures: list[dict[str, Any]] = []
-    for entry in scanned:
+    scanned: list[UniverseEntry] = []
+    for entry in eligible:
+        if time.monotonic() - started >= budget_seconds:
+            budget_exhausted = True
+            break
+        scanned.append(entry)
         try:
             history = get_price_history(config, entry.ticker, years=1)
         except AppError as exc:
@@ -341,10 +364,17 @@ def _yahoo_prefilter_candidates(
 
     candidates.sort(key=_prefilter_sort_key)
     candidates = candidates[:selected_limit]
+    elapsed = time.monotonic() - started
     warnings: list[str] = [
         "End-of-day prefilter: ranking uses the last two daily bars, not live intraday quotes."
     ]
-    if len(entries) > cap:
+    if budget_exhausted:
+        warnings.append(
+            f"Ranking stopped after {len(scanned)} of {len(entries)} symbols to stay inside the "
+            f"{budget_seconds:.0f}s prefilter time budget (VCB_ALT_PREFILTER_TIME_BUDGET_SECONDS). "
+            "Results are cached, so running the scan again continues through the universe."
+        )
+    elif len(entries) > cap:
         warnings.append(
             f"Only the first {cap} of {len(entries)} universe symbols were ranked "
             "(VCB_ALT_YAHOO_PREFILTER_MAX_SYMBOLS)."
@@ -355,6 +385,10 @@ def _yahoo_prefilter_candidates(
         "source": "yahoo:eod",
         "count": len(candidates),
         "scanned_symbols": len(scanned),
+        "skipped_symbols": len(entries) - len(scanned),
+        "time_budget_seconds": round(budget_seconds, 2),
+        "time_budget_exhausted": budget_exhausted,
+        "elapsed_seconds": round(elapsed, 2),
         "prefilter_limit": selected_limit,
         "failures": failures[:10],
         "warnings": warnings,
@@ -453,12 +487,27 @@ def _evaluate_prefiltered_candidates(
     evaluations: list[EvaluationResult] = []
     for candidate in candidates:
         try:
-            snapshot = _snapshot_from_prefilter(candidate)
+            snapshot = _snapshot_for_candidate(config, candidate)
             snapshot = apply_research_enrichment(config, snapshot)
             evaluations.append(evaluate_snapshot(snapshot))
         except AppError as exc:
             failures.append({"ticker": candidate.ticker, "code": exc.code, "message": exc.message})
     return evaluations
+
+
+def _snapshot_for_candidate(config: AppConfig, candidate: PrefilterCandidate) -> StockSnapshot:
+    """Turn a ranked candidate into the snapshot the scoring engine expects.
+
+    Intraday candidates carry their own quote, so they are converted directly. End-of-day
+    candidates must not be: a hand-built snapshot loses the trend-template score and gets
+    labelled as intraday data that is always stale, which scores the momentum archetype at
+    zero and makes the candidate unselectable no matter how strong the move was. The
+    provider path already produces the correct end-of-day snapshot, and the bars it needs
+    are in the cache the prefilter just filled, so delegating costs little.
+    """
+    if candidate.source.startswith("alpaca"):
+        return _snapshot_from_prefilter(candidate)
+    return get_snapshot(config, candidate.ticker)
 
 
 def _evaluate_sample_universe(config: AppConfig, failures: list[dict[str, Any]], *, limit: int) -> list[EvaluationResult]:
@@ -537,7 +586,7 @@ def _request_alpaca_assets(config: AppConfig, query: str) -> str:
 
 
 def _load_csv_universe(config: AppConfig) -> list[UniverseEntry]:
-    path = market_universe_path(config.root_dir)
+    path = market_universe_path(config)
     if not path.exists():
         return []
     entries: list[UniverseEntry] = []

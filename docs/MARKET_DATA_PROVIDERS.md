@@ -39,9 +39,17 @@ meant for a curated universe rather than the whole market.
    the integration is written and tested, and the failure is a credential mismatch rather
    than anything structural. [GO_LIVE_RUNBOOK.md](GO_LIVE_RUNBOOK.md) Step 3 covers it.
 2. **Until then, run the end-of-day prefilter.** Set `VCB_ALT_MARKET_PREFILTER_PROVIDER=yahoo`
-   with an operator universe in `data/universe.csv`. No account, no key, no payment. The
-   scan produces ranked candidates again; they are ranked on yesterday's close rather than
-   live quotes, and the existing data-quality gate still governs final selection.
+   with an operator universe in `universe.csv` under `VCB_ALT_DATA_DIR`. No account, no key,
+   no payment. Verified end to end on 2026-08-25: a five-symbol universe scored 58-96 and
+   the portfolio selected three names totalling 62.95%.
+
+   Two things this path needs, both of which the scan reports:
+   - **Enrichment is mandatory for selection.** Price and volume alone reach only 35/100
+     data coverage, below the 60 gate, so nothing is selectable. Supply `enrichment.csv`
+     (also under `VCB_ALT_DATA_DIR`) or configure Finnhub. This gate is deliberate.
+   - **It costs roughly a second per symbol**, since Yahoo answers one symbol per request.
+     `VCB_ALT_PREFILTER_TIME_BUDGET_SECONDS` stops the run before it overruns a serverless
+     execution limit and reports how many symbols were skipped.
 3. **If Alpaca cannot be recovered,** Polygon.io's full-market snapshot is the closest
    replacement in shape, at a paid tier. Twelve Data is the cheapest workable option for a
    universe of a few hundred symbols.
