@@ -4,6 +4,8 @@ from .models import ARCHETYPE_CAPS, ARCHETYPE_LABELS, SCORING_VERSION, Evaluatio
 from .validation import validate_positive_number, validate_ticker
 
 MIN_DATA_COVERAGE_FOR_ENTRY = 60
+# The score a candidate must reach before the coverage gate is even considered.
+ENTRY_SCORE_THRESHOLD = 55
 
 
 def _points(condition: bool, value: int) -> int:
@@ -144,7 +146,7 @@ def evaluate_snapshot(snapshot: StockSnapshot) -> EvaluationResult:
     combined_score = _clamp_score(primary_score + modifier)
     setup = _setup_strength(combined_score)
     coverage = assess_data_coverage(snapshot)
-    can_enter = combined_score >= 55 and bool(coverage["allows_entry"])
+    can_enter = combined_score >= ENTRY_SCORE_THRESHOLD and bool(coverage["allows_entry"])
 
     cap = ARCHETYPE_CAPS[primary_archetype]
     score_factor = 0.55 + (combined_score / 100) * 0.45
@@ -157,7 +159,7 @@ def evaluate_snapshot(snapshot: StockSnapshot) -> EvaluationResult:
     ]
     if can_enter:
         rationale.append("Score is above the MVP portfolio-manager threshold of 55.")
-    elif combined_score >= 55 and not coverage["allows_entry"]:
+    elif combined_score >= ENTRY_SCORE_THRESHOLD and not coverage["allows_entry"]:
         rationale.append("Score passed the numeric threshold, but final selection is blocked until enrichment data is present.")
     else:
         rationale.append("Score is below the MVP portfolio-manager threshold of 55; wait.")

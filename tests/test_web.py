@@ -227,6 +227,24 @@ class WebTests(unittest.TestCase):
                 self.assertNotIn(secret_key, rendered)
                 self.assertNotIn(secret_value, rendered)
 
+    def test_dashboard_can_explain_sample_data_and_blocked_selections(self) -> None:
+        """Sample results render in the same frame as live ones, and an empty selection
+        used to say only "no eligible candidates" when the cause was missing enrichment."""
+        app_js = _served("app.js")
+        index_html = _served("index.html")
+
+        self.assertIn('id="sample-banner"', index_html)
+        self.assertIn("updateSampleDataBanner", app_js)
+        self.assertIn("sample_data_banner", app_js)
+        self.assertIn("renderNothingSelected", app_js)
+        for key in ("nothing_selected_lead", "blocked_by_coverage", "blocked_by_score"):
+            self.assertIn(key, app_js)
+        # Both languages must carry every new string.
+        english, korean = app_js.split("  ko: {", 1)
+        for key in ("sample_data_banner", "nothing_selected_lead", "blocked_by_coverage_help"):
+            self.assertIn(key, english, f"{key} missing from English")
+            self.assertIn(key, korean, f"{key} missing from Korean")
+
     def test_shared_token_gate_and_tenant_paths_agree(self) -> None:
         """The auth gate and the rate limiter share one list of tenant paths.
 

@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import unittest
 
-from vcb_alt.models import EvaluationResult
+from vcb_alt.models import EvaluationResult, StockSnapshot
 from vcb_alt.portfolio import select_portfolio
 from vcb_alt.sample_data import get_snapshot
-from vcb_alt.scoring import evaluate_snapshot
+from vcb_alt.scoring import ENTRY_SCORE_THRESHOLD, MIN_DATA_COVERAGE_FOR_ENTRY, evaluate_snapshot
 
 
 class PortfolioTests(unittest.TestCase):
@@ -65,3 +65,47 @@ def make_result(ticker: str, score: int, *, coverage: int = 0) -> EvaluationResu
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BlockedReasonTests(unittest.TestCase):
+    """Every blocked name used to report "Score below entry threshold".
+
+    That included names that cleared the score and were held back by missing research
+    data, which pointed the reader at the score when the fix was to add enrichment.
+    """
+
+    def _evaluation(self, ticker: str, score: int, coverage: int) -> EvaluationResult:
+        snapshot = StockSnapshot(
+            ticker=ticker, company_name=ticker, price=100.0, source="yahoo",
+            data_quality="eod-market",
+            trend_template_score=100.0 if score > 50 else 5.0,
+            surge_score=60.0 if score > 50 else 0.0,
+            breakout_volume_ratio=2.0 if score > 50 else 1.0,
+        )
+        result = evaluate_snapshot(snapshot)
+        self.assertEqual(result.data_coverage_score, coverage)
+        return result
+
+    def test_coverage_block_is_reported_as_coverage_not_score(self) -> None:
+        strong = self._evaluation("KO", 75, 35)
+        self.assertGreaterEqual(strong.combined_score, ENTRY_SCORE_THRESHOLD)
+        self.assertFalse(strong.can_enter)
+
+        selection = select_portfolio([strong])
+        reason = selection.rejected[0]["reason"]
+        self.assertIn("coverage", reason.lower())
+        self.assertIn(str(MIN_DATA_COVERAGE_FOR_ENTRY), reason)
+        self.assertNotIn("Score below", reason)
+
+    def test_genuine_low_score_still_says_so(self) -> None:
+        weak = self._evaluation("TSLA", 17, 35)
+        self.assertLess(weak.combined_score, ENTRY_SCORE_THRESHOLD)
+        selection = select_portfolio([weak])
+        self.assertEqual(selection.rejected[0]["reason"], "Score below entry threshold.")
+
+    def test_reason_wording_does_not_change_what_is_selected(self) -> None:
+        strong = self._evaluation("KO", 75, 35)
+        weak = self._evaluation("TSLA", 17, 35)
+        selection = select_portfolio([strong, weak])
+        self.assertEqual(selection.selected, [])
+        self.assertEqual(len(selection.rejected), 2)

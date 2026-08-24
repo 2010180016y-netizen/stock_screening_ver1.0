@@ -96,6 +96,12 @@ const I18N = {
     failures: 'failures',
     selection_completed: 'Selection completed in {ms} ms.',
     no_eligible: 'No eligible candidates. Check live data coverage or run again after data refresh.',
+    nothing_selected_lead: 'The scan ran, but nothing cleared the bar for selection. Here is what stopped it:',
+    sample_data_banner: 'Demo data. These are offline sample tickers, not real market results - do not act on them. Set VCB_ALT_DATA_PROVIDER=yahoo with VCB_ALT_EXTERNAL_API_ENABLED=true for real data.',
+    blocked_by_coverage: '{count} name(s) scored well enough but lack research data',
+    blocked_by_coverage_help: 'Selection needs 60/100 data coverage. Price and volume alone reach 35. Configure Finnhub (VCB_ALT_RESEARCH_DATA_PROVIDER=finnhub) or fill enrichment.csv.',
+    blocked_by_score: '{count} name(s) scored below the entry threshold',
+    blocked_by_score_help: 'These simply are not strong setups right now. Nothing to fix.',
     allocation_guide: 'Research size reference',
     scanning: 'Scanning the market...',
     scan_coverage: 'Ranked {scanned} of {total} symbols from {source}.',
@@ -193,6 +199,12 @@ const I18N = {
     failures: '실패',
     selection_completed: '후보 계산이 {ms} ms 안에 완료되었습니다.',
     no_eligible: '조건을 충족하는 후보가 없습니다. 데이터 커버리지를 확인하거나 갱신 후 다시 실행하세요.',
+    nothing_selected_lead: '스캔은 실행됐지만 선정 기준을 넘은 종목이 없습니다. 원인은 다음과 같습니다:',
+    sample_data_banner: '데모 데이터입니다. 실제 시장 결과가 아닌 오프라인 샘플 종목이므로 투자 판단에 쓰지 마세요. 실제 데이터를 보려면 VCB_ALT_DATA_PROVIDER=yahoo와 VCB_ALT_EXTERNAL_API_ENABLED=true를 설정하세요.',
+    blocked_by_coverage: '{count}개 종목은 점수는 충분하지만 리서치 데이터가 없습니다',
+    blocked_by_coverage_help: '선정에는 커버리지 60/100이 필요한데 가격·거래량만으로는 35입니다. Finnhub를 설정하거나(VCB_ALT_RESEARCH_DATA_PROVIDER=finnhub) enrichment.csv를 채우세요.',
+    blocked_by_score: '{count}개 종목은 진입 점수에 못 미쳤습니다',
+    blocked_by_score_help: '지금은 좋은 조건이 아니라는 뜻이며, 고칠 것은 없습니다.',
     allocation_guide: '검토 비중 참고',
     scanning: '시장을 스캔하는 중...',
     scan_coverage: '{source}에서 {total}개 중 {scanned}개 종목을 평가했습니다.',
@@ -816,6 +828,7 @@ function renderScanReport(data, { notice } = {}) {
   }
   updateDataStatus(data.items, data.failures || []);
   updateDiscoverySummary(data);
+  updateSampleDataBanner(data);
   const coverage = scanCoverageMessage(data);
   const done = notice || (state.lang === 'ko'
     ? `시장 전체 스캔이 ${data.elapsed_ms} ms 안에 완료되었습니다.`
@@ -920,6 +933,50 @@ async function runSelection() {
   }
 }
 
+// A scan that finds nothing selectable used to say only "no eligible candidates", which
+// reads as "the market had nothing" when the usual cause is missing research data. The
+// per-candidate rejection reasons already say which gate stopped each name; group them so
+// the reader sees the actual blocker and what to do about it.
+// Sample data renders in exactly the same frame as live results - same cards, same
+// allocation percentages - so on a default install the dashboard can look like it is
+// recommending real positions. Say so unmistakably, above the results.
+function updateSampleDataBanner(data = {}) {
+  const banner = document.getElementById('sample-banner');
+  if (!banner) return;
+  const items = Array.isArray(data.items) ? data.items : [];
+  const selected = data.selection && Array.isArray(data.selection.selected) ? data.selection.selected : [];
+  const sources = [...items, ...selected].map((item) => String(item.source || ''));
+  const universeSource = String((data.universe || {}).source || '');
+  const isSample = universeSource === 'sample' || sources.some((source) => source.startsWith('sample'));
+  banner.hidden = !isSample;
+  if (isSample) banner.textContent = t('sample_data_banner');
+}
+
+function renderNothingSelected(selection) {
+  const rejected = Array.isArray(selection.rejected) ? selection.rejected : [];
+  if (!rejected.length) return `<div class="empty-state">${escapeHtml(t('no_eligible'))}</div>`;
+
+  const coverageBlocked = rejected.filter((item) => /coverage/i.test(item.reason || ''));
+  const scoreBlocked = rejected.filter((item) => !/coverage/i.test(item.reason || ''));
+  const parts = [`<p class="blocked-lead">${escapeHtml(t('nothing_selected_lead'))}</p>`];
+
+  if (coverageBlocked.length) {
+    const names = coverageBlocked.slice(0, 6).map((item) => item.ticker).join(', ');
+    parts.push(`<div class="blocked-reason">
+      <strong>${escapeHtml(t('blocked_by_coverage', { count: coverageBlocked.length }))}</strong>
+      <p>${escapeHtml(t('blocked_by_coverage_help'))}</p>
+      <p class="blocked-names">${escapeHtml(names)}${coverageBlocked.length > 6 ? '...' : ''}</p>
+    </div>`);
+  }
+  if (scoreBlocked.length) {
+    parts.push(`<div class="blocked-reason muted">
+      <strong>${escapeHtml(t('blocked_by_score', { count: scoreBlocked.length }))}</strong>
+      <p>${escapeHtml(t('blocked_by_score_help'))}</p>
+    </div>`);
+  }
+  return `<div class="empty-state blocked-state">${parts.join('')}</div>`;
+}
+
 function renderSelection(selection, elapsedMs) {
   document.getElementById('selection-meta').textContent =
     isKo()
@@ -927,7 +984,7 @@ function renderSelection(selection, elapsedMs) {
       : `${selection.selected.length}/${selection.max_positions}, ${selection.total_size_pct}% in ${elapsedMs} ms`;
   const target = document.getElementById('selection');
   if (!selection.selected.length) {
-    target.innerHTML = `<div class="empty-state">${t('no_eligible')}</div>`;
+    target.innerHTML = renderNothingSelected(selection);
     return;
   }
   target.innerHTML = selection.selected.map((item, index) => `

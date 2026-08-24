@@ -472,6 +472,26 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; }
 .diagnostics p { margin: 8px 0 4px; color: var(--ink); }
 .diagnostics ul { margin: 0; padding-left: 18px; color: var(--ink); }
 .diagnostics li { margin-bottom: 4px; }
+.sample-banner {
+  margin: 12px 24px 0;
+  padding: 11px 13px;
+  border: 1px solid rgba(242, 189, 102, 0.45);
+  border-left: 4px solid var(--warn);
+  border-radius: 6px;
+  background: rgba(242, 189, 102, 0.10);
+  color: var(--warn);
+  font-size: 13px;
+  line-height: 1.45;
+  font-weight: 600;
+}
+.sample-banner[hidden] { display: none; }
+.blocked-state { text-align: left; display: grid; gap: 12px; padding: 6px 0 2px; }
+.blocked-lead { margin: 0; color: var(--ink); }
+.blocked-reason { border-left: 3px solid var(--warn); padding-left: 11px; }
+.blocked-reason.muted { border-left-color: var(--line); }
+.blocked-reason strong { display: block; color: var(--ink); margin-bottom: 4px; }
+.blocked-reason p { margin: 0 0 4px; font-size: 13px; }
+.blocked-names { color: var(--muted); font-size: 12px; }
 .clickable { cursor: pointer; }
 /* Placeholder rows shown while a scan is running, so the tables report progress
    instead of holding the previous result or an empty state that reads as "nothing

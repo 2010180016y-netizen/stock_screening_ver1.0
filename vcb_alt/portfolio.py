@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .models import HIGH_VOL_ARCHETYPES, EvaluationResult, PortfolioSelection
+from .scoring import ENTRY_SCORE_THRESHOLD, MIN_DATA_COVERAGE_FOR_ENTRY
 
 ARCHETYPE_DIVERSIFICATION_EXEMPT = {"G_TECHNICAL_MOMENTUM"}
 
@@ -44,7 +45,7 @@ def select_portfolio(
 
     for item in evaluations:
         if not item.can_enter:
-            rejected.append({"ticker": item.ticker, "reason": "Score below entry threshold."})
+            rejected.append({"ticker": item.ticker, "reason": _blocked_reason(item)})
 
     return PortfolioSelection(
         selected=selected,
@@ -54,6 +55,21 @@ def select_portfolio(
         total_size_pct=total_size,
         data_provider=_infer_provider(evaluations),
     )
+
+
+def _blocked_reason(item: EvaluationResult) -> str:
+    """Say which gate actually stopped a candidate.
+
+    Every blocked name used to report "Score below entry threshold", including names that
+    cleared the score comfortably and were held back by missing research data. That sent
+    the reader looking at the score when the fix was to configure enrichment.
+    """
+    if item.combined_score >= ENTRY_SCORE_THRESHOLD and item.data_coverage_score < MIN_DATA_COVERAGE_FOR_ENTRY:
+        return (
+            f"Data coverage {item.data_coverage_score}/100 is below the {MIN_DATA_COVERAGE_FOR_ENTRY} "
+            "required for selection; add research enrichment."
+        )
+    return "Score below entry threshold."
 
 
 def _selection_sort_key(item: EvaluationResult) -> tuple[float, float, int, float, str]:
