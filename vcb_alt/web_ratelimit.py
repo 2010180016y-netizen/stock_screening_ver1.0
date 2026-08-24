@@ -57,7 +57,12 @@ def rate_limit_bucket(
                 )
             if conn is None:
                 return (f"session:{hash_token(token)[:24]}:{route_group}", config.user_rate_limit_per_minute)
-    if path in {"/api/auth/register", "/api/auth/login"}:
+    # Login gets its own, much tighter bucket. Sharing one with registration meant a
+    # limit sized for signup bursts (2000/min) also allowed ~33 password guesses per
+    # second per IP, which is no brute-force protection at all.
+    if path == "/api/auth/login":
+        return (f"ip:{ip}:login", config.login_rate_limit_per_minute)
+    if path == "/api/auth/register":
         return (f"ip:{ip}:auth", config.auth_rate_limit_per_minute)
     return (f"ip:{ip}:{route_group}", config.rate_limit_per_minute)
 

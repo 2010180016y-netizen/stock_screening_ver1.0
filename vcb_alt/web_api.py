@@ -37,6 +37,8 @@ from .job_queue import (
     get_market_scan_job,
     get_scan_job,
     list_scan_jobs,
+    public_market_scan_job,
+    public_market_scan_outcome,
     queue_status,
     run_queued_scan_jobs,
     validate_job_limit,
@@ -193,7 +195,9 @@ def handle_api(
                 outcome = enqueue_or_get_market_scan_snapshot(config, conn, user)
                 if outcome["state"] == "fresh":
                     return OperationResult.success("Fresh market scan snapshot loaded.", outcome["report"])
-                return OperationResult.success("Market scan snapshot queued.", outcome, status_code=202)
+                return OperationResult.success(
+                    "Market scan snapshot queued.", public_market_scan_outcome(outcome), status_code=202
+                )
             return OperationResult.success("Scan job queued.", enqueue_scan_job(conn, user), status_code=202)
         if path == "/api/user/scan" and method in {"GET", "POST"}:
             if not config.user_auth_enabled:
@@ -223,7 +227,7 @@ def handle_api(
                 raise ValidationError("Scan queue is not enabled.")
             require_user(conn, bearer_token(headers or {}))
             job_id = path.removeprefix("/api/jobs/market-scan/")
-            return OperationResult.success("Market scan job loaded.", get_market_scan_job(conn, job_id))
+            return OperationResult.success("Market scan job loaded.", public_market_scan_job(get_market_scan_job(conn, job_id)))
         if path.startswith("/api/jobs/") and method == "GET":
             if not config.user_auth_enabled or not config.scan_queue_enabled:
                 raise ValidationError("Scan queue is not enabled.")
@@ -355,7 +359,9 @@ def _scan_user(config: AppConfig, conn: Any, user: dict[str, Any], *, message: s
             outcome = enqueue_or_get_market_scan_snapshot(config, conn, user)
             if outcome["state"] == "fresh":
                 return OperationResult.success("Fresh market scan snapshot loaded.", outcome["report"])
-            return OperationResult.success("Market scan snapshot queued.", outcome, status_code=202)
+            return OperationResult.success(
+                "Market scan snapshot queued.", public_market_scan_outcome(outcome), status_code=202
+            )
         report = scan_market_universe(config)
         for result in report.evaluations:
             save_user_evaluation(conn, user, result, commit=False)

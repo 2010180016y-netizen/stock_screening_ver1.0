@@ -60,6 +60,26 @@ def verify_password(password: str, encoded: str) -> bool:
     return hmac.compare_digest(candidate, expected)
 
 
+_DUMMY_PASSWORD_HASH: str | None = None
+
+
+def verify_password_or_dummy(password: str, encoded: str | None) -> bool:
+    """Verify a password, spending the same work when the account does not exist.
+
+    Skipping the hash for an unknown email made those logins answer roughly 800x faster
+    than logins for a real account, which reveals which addresses are registered. The
+    dummy hash is built on first use rather than at import so it costs nothing on a
+    cold start that never serves a login.
+    """
+    global _DUMMY_PASSWORD_HASH
+    if encoded:
+        return verify_password(password, encoded)
+    if _DUMMY_PASSWORD_HASH is None:
+        _DUMMY_PASSWORD_HASH = hash_password("dummy-password-for-constant-time-login")
+    verify_password(password, _DUMMY_PASSWORD_HASH)
+    return False
+
+
 def new_session_token() -> str:
     return secrets.token_urlsafe(SESSION_TOKEN_BYTES)
 

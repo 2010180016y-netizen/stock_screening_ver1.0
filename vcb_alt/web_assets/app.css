@@ -484,6 +484,24 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; }
   background-size: 320px 100%;
   animation: skeleton-sweep 1.3s ease-in-out infinite;
 }
+.sk-w00 { width: 46%; }
+.sk-w01 { width: 78%; }
+.sk-w02 { width: 38%; }
+.sk-w03 { width: 62%; }
+.sk-w04 { width: 44%; }
+.sk-w05 { width: 70%; }
+.sk-w10 { width: 52%; }
+.sk-w11 { width: 64%; }
+.sk-w12 { width: 42%; }
+.sk-w13 { width: 55%; }
+.sk-w14 { width: 38%; }
+.sk-w15 { width: 58%; }
+.sk-w20 { width: 40%; }
+.sk-w21 { width: 72%; }
+.sk-w22 { width: 35%; }
+.sk-w23 { width: 68%; }
+.sk-w24 { width: 48%; }
+.sk-w25 { width: 52%; }
 .skeleton-row:nth-child(2) .skeleton-cell span { opacity: 0.75; }
 .skeleton-row:nth-child(3) .skeleton-cell span { opacity: 0.5; }
 @keyframes skeleton-sweep {

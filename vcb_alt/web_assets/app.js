@@ -470,9 +470,10 @@ function setBusy(busy) {
 // While a scan runs the candidate tables would otherwise keep the previous result or an
 // empty state reading "no candidates" - both of which look like a finished answer.
 function showScanSkeleton() {
-  const widths = [['46%', '78%', '38%', '62%', '44%', '70%'], ['52%', '64%', '42%', '55%', '38%', '58%'], ['40%', '72%', '35%', '68%', '48%', '52%']];
-  const rows = widths.map((row) => `<tr class="skeleton-row" aria-hidden="true">${
-    row.map((width) => `<td class="skeleton-cell"><span style="width:${width}"></span></td>`).join('')
+  // Widths come from CSS classes rather than inline styles so the page needs no
+  // style-src 'unsafe-inline' in its Content-Security-Policy.
+  const rows = [0, 1, 2].map((row) => `<tr class="skeleton-row" aria-hidden="true">${
+    [0, 1, 2, 3, 4, 5].map((cell) => `<td class="skeleton-cell"><span class="sk-w${row}${cell}"></span></td>`).join('')
   }</tr>`).join('');
   ['actionable-body', 'excluded-body'].forEach((id) => { document.getElementById(id).innerHTML = rows; });
   document.getElementById('actionable-meta').textContent = t('scanning');

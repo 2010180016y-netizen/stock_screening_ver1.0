@@ -6,7 +6,14 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from .auth import hash_password, hash_token, new_session_token, normalize_email, public_user, verify_password
+from .auth import (
+    hash_password,
+    hash_token,
+    new_session_token,
+    normalize_email,
+    public_user,
+    verify_password_or_dummy,
+)
 from .errors import ConflictError, ForbiddenError, UnauthorizedError
 from .logging_utils import utc_now
 from .models import EvaluationResult
@@ -145,7 +152,7 @@ def login_user(conn: sqlite3.Connection, *, email: str, password: str) -> dict[s
         "SELECT id, tenant_id, email, password_hash, role FROM users WHERE email = ?",
         (safe_email,),
     ).fetchone()
-    if row is None or not verify_password(password, row["password_hash"]):
+    if not verify_password_or_dummy(password, row["password_hash"] if row is not None else None):
         raise UnauthorizedError("Invalid email or password.")
     token = create_session(conn, dict(row))
     return {"session_token": token, "user": public_user(dict(row))}

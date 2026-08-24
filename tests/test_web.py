@@ -15,8 +15,10 @@ from vcb_alt.web_auth import (
     is_tenant_authenticated_path,
     requires_shared_token,
 )
+from vcb_alt.web_ratelimit import rate_limit_bucket
 from vcb_alt.web import (
     WEB_ASSET_DIR,
+    _security_headers,
     _auth_cookie_headers,
     _client_ip,
     _is_authorized,
@@ -140,6 +142,46 @@ class WebTests(unittest.TestCase):
             self.assertFalse(_is_authorized(_FakeHandler({}), config, "token=1234567890abcdef"))
             self.assertTrue(_is_authorized(_FakeHandler({"authorization": "Bearer 1234567890abcdef"}), config, ""))
             self.assertEqual(_auth_cookie_headers(_FakeHandler({}), config, "token=1234567890abcdef"), {})
+
+    def test_responses_carry_security_headers(self) -> None:
+        """Documents get a strict CSP; every response gets nosniff and no-referrer."""
+        html_headers = _security_headers(_FakeHandler({"x-forwarded-proto": "https"}), document=True)
+        self.assertEqual(html_headers["X-Content-Type-Options"], "nosniff")
+        self.assertEqual(html_headers["Referrer-Policy"], "no-referrer")
+        self.assertEqual(html_headers["X-Frame-Options"], "DENY")
+        self.assertIn("max-age=31536000", html_headers["Strict-Transport-Security"])
+        policy = html_headers["Content-Security-Policy"]
+        for directive in ("default-src 'none'", "script-src 'self'", "frame-ancestors 'none'", "base-uri 'none'"):
+            self.assertIn(directive, policy)
+        # A strict policy is only safe because nothing inlines script or style.
+        self.assertNotIn("unsafe-inline", policy)
+        self.assertNotIn("unsafe-eval", policy)
+
+        api_headers = _security_headers(_FakeHandler({}), document=False)
+        self.assertEqual(api_headers["X-Content-Type-Options"], "nosniff")
+        self.assertNotIn("Content-Security-Policy", api_headers)
+        self.assertNotIn("Strict-Transport-Security", api_headers)
+
+    def test_served_assets_contain_nothing_the_csp_would_block(self) -> None:
+        for name in ("index.html", "detail.html", "login.html", "app.js", "detail.js", "app.css"):
+            with self.subTest(asset=name):
+                text = _served(name)
+                self.assertNotIn("<script>", text)
+                self.assertNotIn("style=\"", text)
+                self.assertNotIn("javascript:", text)
+                self.assertNotIn("http://", text)
+                self.assertNotIn("https://", text)
+
+    def test_login_is_rate_limited_far_tighter_than_registration(self) -> None:
+        """A limit sized for signup bursts is not a brute-force control for login."""
+        with tempfile.TemporaryDirectory() as tmp:
+            config = AppConfig(**{**make_config(Path(tmp)).__dict__, "user_auth_enabled": True})
+            handler = _FakeHandler({}, client_ip="203.0.113.5")
+            login_key, login_limit = rate_limit_bucket(handler, config, "POST", "/api/auth/login", None)
+            register_key, register_limit = rate_limit_bucket(handler, config, "POST", "/api/auth/register", None)
+            self.assertNotEqual(login_key, register_key)
+            self.assertLessEqual(login_limit, 60)
+            self.assertLess(login_limit, register_limit)
 
     def test_provider_panel_endpoints_stay_secret_safe(self) -> None:
         """The operations panel renders these two payloads verbatim.

@@ -292,6 +292,25 @@ def _enqueue_market_scan_snapshot_for_worker(conn: Any, *, requested_by: str) ->
     }
 
 
+# The market-scan snapshot is one shared resource, so any authenticated user can see the
+# job for it. requested_by holds the email of whoever triggered the scan, which means
+# returning the raw row hands one tenant a user identity from another. Strip the
+# operator-only fields at the API boundary; the column stays for operations and logs.
+INTERNAL_MARKET_SCAN_FIELDS = ("requested_by",)
+
+
+def public_market_scan_job(job: dict[str, Any] | None) -> dict[str, Any] | None:
+    if job is None:
+        return None
+    return {key: value for key, value in job.items() if key not in INTERNAL_MARKET_SCAN_FIELDS}
+
+
+def public_market_scan_outcome(outcome: dict[str, Any]) -> dict[str, Any]:
+    if "job" not in outcome:
+        return outcome
+    return {**outcome, "job": public_market_scan_job(outcome["job"])}
+
+
 def get_market_scan_job(conn: Any, job_id: str) -> dict[str, Any]:
     row = conn.execute(
         """

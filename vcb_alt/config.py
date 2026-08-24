@@ -69,6 +69,7 @@ class AppConfig:
     user_registration_enabled: bool = False
     rate_limit_per_minute: int = 120
     auth_rate_limit_per_minute: int = 2000
+    login_rate_limit_per_minute: int = 20
     user_rate_limit_per_minute: int = 600
     worker_rate_limit_per_minute: int = 1200
     rate_limit_backend: str = "memory"
@@ -228,6 +229,10 @@ def load_config(root_dir: Path | None = None) -> AppConfig:
         get("AUTH_RATE_LIMIT_PER_MINUTE", "2000"),
         "AUTH_RATE_LIMIT_PER_MINUTE",
     )
+    login_rate_limit_per_minute = _parse_positive_int(
+        get("LOGIN_RATE_LIMIT_PER_MINUTE", "20"),
+        "LOGIN_RATE_LIMIT_PER_MINUTE",
+    )
     user_rate_limit_per_minute = _parse_positive_int(
         get("USER_RATE_LIMIT_PER_MINUTE", "600"),
         "USER_RATE_LIMIT_PER_MINUTE",
@@ -328,6 +333,7 @@ def load_config(root_dir: Path | None = None) -> AppConfig:
         user_registration_enabled=user_registration_enabled,
         rate_limit_per_minute=rate_limit_per_minute,
         auth_rate_limit_per_minute=auth_rate_limit_per_minute,
+        login_rate_limit_per_minute=login_rate_limit_per_minute,
         user_rate_limit_per_minute=user_rate_limit_per_minute,
         worker_rate_limit_per_minute=worker_rate_limit_per_minute,
         rate_limit_backend=rate_limit_backend,
@@ -368,6 +374,7 @@ def doctor_report(config: AppConfig) -> dict[str, Any]:
         "user_registration_enabled": config.user_registration_enabled,
         "rate_limit_per_minute": config.rate_limit_per_minute,
         "auth_rate_limit_per_minute": config.auth_rate_limit_per_minute,
+        "login_rate_limit_per_minute": config.login_rate_limit_per_minute,
         "user_rate_limit_per_minute": config.user_rate_limit_per_minute,
         "worker_rate_limit_per_minute": config.worker_rate_limit_per_minute,
         "rate_limit_backend": config.rate_limit_backend,

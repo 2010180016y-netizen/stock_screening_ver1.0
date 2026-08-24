@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -327,6 +328,55 @@ class SaasAuthTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 202)
                 self.assertEqual(response.data["state"], "queued")
                 self.assertNotIn("items", response.data)
+
+    def test_market_scan_job_does_not_leak_another_tenants_identity(self) -> None:
+        """The market snapshot is one shared resource, so its job is visible to everyone.
+
+        requested_by holds the email of whoever triggered the scan. Returning the raw row
+        handed a user in one tenant an account identity from another.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            config = make_config(Path(tmp))
+            config = AppConfig(
+                **{
+                    **config.__dict__,
+                    "scan_mode": "market_universe",
+                    "scan_queue_enabled": True,
+                    "worker_token": "worker-token-123456",
+                    "worker_cron_enabled": True,
+                    "production_saas_mode": True,
+                }
+            )
+            with connect(config) as conn:
+                init_db(conn)
+                init_saas_db(conn)
+                create_user(conn, email="victim@tenant-a.example", password="very-secure-password")
+                create_user(conn, email="attacker@tenant-b.example", password="very-secure-password")
+                victim = login_user(conn, email="victim@tenant-a.example", password="very-secure-password")
+                attacker = login_user(conn, email="attacker@tenant-b.example", password="very-secure-password")
+
+                # The victim triggers the shared market scan first.
+                handle_api(
+                    config, "POST", "/api/user/scan", "", None,
+                    {"authorization": f"Bearer {victim['session_token']}"},
+                )
+                attacker_headers = {"authorization": f"Bearer {attacker['session_token']}"}
+                queued = handle_api(config, "POST", "/api/user/scan", "", None, attacker_headers)
+                job = queued.data["job"]
+                self.assertNotIn("requested_by", job)
+                self.assertNotIn("victim@tenant-a.example", json.dumps(queued.data, default=str))
+
+                detail = handle_api(
+                    config, "GET", f"/api/jobs/market-scan/{job['id']}", "", None, attacker_headers,
+                )
+                self.assertNotIn("requested_by", detail.data)
+                self.assertNotIn("victim@tenant-a.example", json.dumps(detail.data, default=str))
+
+                # The column still exists for operations.
+                row = conn.execute(
+                    "SELECT requested_by FROM market_scan_snapshots WHERE id = ?", (job["id"],)
+                ).fetchone()
+                self.assertEqual(row["requested_by"], "victim@tenant-a.example")
 
     def test_user_scan_returns_202_with_a_pollable_job_id(self) -> None:
         """The dashboard polls this contract, so its shape must stay stable.

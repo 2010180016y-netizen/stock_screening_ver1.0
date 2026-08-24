@@ -209,11 +209,43 @@ def _read_json(handler: BaseHTTPRequestHandler, config: AppConfig) -> dict[str, 
     return value
 
 
+# The dashboard is a token-protected page that can trigger scans and delete data, and it
+# was served with no security headers at all. The assets are fully self-contained - no
+# external origins, no inline scripts or styles - so the policy can stay strict.
+CONTENT_SECURITY_POLICY = (
+    "default-src 'none'; "
+    "script-src 'self'; "
+    "style-src 'self'; "
+    "img-src 'self' data:; "
+    "connect-src 'self'; "
+    "form-action 'self'; "
+    "base-uri 'none'; "
+    "frame-ancestors 'none'"
+)
+
+
+def _security_headers(handler: BaseHTTPRequestHandler, *, document: bool) -> dict[str, str]:
+    headers = {
+        "X-Content-Type-Options": "nosniff",
+        # This app has historically carried its access token in query strings, so a
+        # referrer would hand that token to any third-party origin the user navigates to.
+        "Referrer-Policy": "no-referrer",
+    }
+    if document:
+        headers["Content-Security-Policy"] = CONTENT_SECURITY_POLICY
+        headers["X-Frame-Options"] = "DENY"
+    if is_https_request(handler):
+        headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return headers
+
+
 def _send_json(handler: BaseHTTPRequestHandler, result: OperationResult, status: int = 200) -> None:
     body = json.dumps(result.to_dict(), ensure_ascii=False, sort_keys=True).encode("utf-8")
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
     handler.send_header("Cache-Control", "no-store")
+    for key, value in _security_headers(handler, document=False).items():
+        handler.send_header(key, value)
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
     handler.wfile.write(body)
@@ -241,6 +273,8 @@ def _send_text(
     handler.send_response(status)
     handler.send_header("Content-Type", content_type)
     handler.send_header("Cache-Control", "no-store")
+    for key, value in _security_headers(handler, document=content_type.startswith("text/html")).items():
+        handler.send_header(key, value)
     for key, value in (extra_headers or {}).items():
         handler.send_header(key, value)
     handler.send_header("Content-Length", str(len(body)))
