@@ -6,6 +6,7 @@ from pathlib import Path
 
 from vcb_alt.config import AppConfig
 from vcb_alt.errors import NotFoundError, ValidationError
+from vcb_alt.models import StockSnapshot
 from vcb_alt.providers import get_snapshot, provider_status
 
 
@@ -64,3 +65,52 @@ class ProviderTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NoAlpacaCoverageTests(unittest.TestCase):
+    """Alpaca is only needed for whole-market intraday ranking, not for data coverage.
+
+    Yahoo supplies the market group; Finnhub supplies fundamentals, catalyst and
+    positioning. Together they clear the 60/100 gate that blocks final selection.
+    """
+
+    def _snapshot(self) -> StockSnapshot:
+        return StockSnapshot(
+            ticker="NVDA", company_name="NVIDIA", price=112.0, source="yahoo",
+            data_quality="eod-market", trend_template_score=86.0, surge_score=40.0,
+            breakout_volume_ratio=2.4,
+        )
+
+    def test_market_data_alone_is_below_the_selection_gate(self) -> None:
+        from vcb_alt.scoring import assess_data_coverage, evaluate_snapshot
+
+        snapshot = self._snapshot()
+        self.assertLess(int(assess_data_coverage(snapshot)["score"]), 60)
+        self.assertFalse(evaluate_snapshot(snapshot).can_enter)
+
+    def test_finnhub_enrichment_clears_the_gate_without_alpaca(self) -> None:
+        from unittest.mock import patch
+
+        from vcb_alt import providers as providers_module
+        from vcb_alt.scoring import assess_data_coverage, evaluate_snapshot
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = AppConfig(
+                database_url="sqlite:///./data/test.db", log_level="INFO", timezone="Asia/Seoul",
+                data_provider="yahoo", external_api_enabled=True, root_dir=root,
+                data_dir=root / "data", log_dir=root / "logs",
+                research_data_provider="finnhub", finnhub_api_key="test-key",
+                intraday_data_provider="none",
+            )
+            finnhub_values = {
+                "market_cap_m": 2_500_000, "eps_revision_pct": 12, "analyst_revision_score": 40,
+                "news_catalyst_30d": True, "news_headline_count_30d": 14,
+                "short_interest_pct": 2.1, "call_open_interest": 18000, "analyst_buy_count": 45,
+            }
+            with patch.object(providers_module, "_load_finnhub_enrichment", return_value=finnhub_values):
+                enriched = providers_module.apply_research_enrichment(config, self._snapshot())
+
+            self.assertEqual(enriched.enrichment_source, "finnhub")
+            self.assertGreaterEqual(int(assess_data_coverage(enriched)["score"]), 60)
+            self.assertTrue(evaluate_snapshot(enriched).can_enter)

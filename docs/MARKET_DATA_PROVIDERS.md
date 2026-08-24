@@ -33,12 +33,63 @@ meant for a curated universe rather than the whole market.
 | **Stooq** (already integrated) | No | No | Keyless | End-of-day CSV; some downloads need a key/captcha |
 | **IEX Cloud** | — | — | — | **Discontinued.** Do not plan around it |
 
+## Running without Alpaca (verified 2026-08-25)
+
+If an Alpaca key is not available, the product still works. Alpaca is only required for
+one job - ranking thousands of symbols on intraday quotes - and nothing else depends on
+it. Yahoo covers the market group, Finnhub covers the other three coverage groups, and
+the watchlist supplies the universe from the dashboard sidebar.
+
+```dotenv
+VCB_ALT_SCAN_MODE=market_universe
+VCB_ALT_EXTERNAL_API_ENABLED=true
+
+# Market data and ranking, no key required
+VCB_ALT_DATA_PROVIDER=yahoo
+VCB_ALT_MARKET_PREFILTER_PROVIDER=yahoo
+VCB_ALT_MARKET_UNIVERSE_PROVIDER=auto      # uses the watchlist when no CSV/Alpaca universe exists
+
+# Enrichment - this is what lifts data coverage past the selection gate
+VCB_ALT_RESEARCH_DATA_PROVIDER=finnhub
+VCB_ALT_FINNHUB_API_KEY=your-existing-finnhub-key
+
+# Alpaca stays off
+VCB_ALT_INTRADAY_DATA_PROVIDER=none
+```
+
+Then add tickers in the dashboard sidebar and press **Scan full market**.
+
+Why this reaches a selection, measured rather than assumed:
+
+| Stage | Result |
+| --- | --- |
+| Yahoo end-of-day snapshot alone | coverage 35/100, `can_enter=false` - below the 60 gate |
+| Plus Finnhub enrichment | coverage 100/100, `can_enter=true`, score 71 |
+
+This matches what production already recorded before the credential broke: a PLTR
+analysis returned `yahoo+finnhub` with data coverage `100/100`.
+
+### What you give up without Alpaca
+
+- **Whole-market discovery.** Yahoo answers one symbol per request, so the universe has
+  to be a watchlist or CSV of a few hundred names, not 5,000. `VCB_ALT_PREFILTER_TIME_BUDGET_SECONDS`
+  stops a run that would overrun a serverless limit and the scan reports how far it got.
+- **Intraday freshness.** Ranking uses the last two daily bars, so a scan reflects
+  yesterday's close rather than a live move.
+
+Neither blocks research use. If whole-market intraday discovery becomes necessary later,
+Polygon.io's full-market snapshot is the closest replacement in shape, at a paid tier.
+
 ## Recommendation
 
-1. **Fix Alpaca.** It is the only option that does the whole-market sweep on a free tier,
-   the integration is written and tested, and the failure is a credential mismatch rather
-   than anything structural. [GO_LIVE_RUNBOOK.md](GO_LIVE_RUNBOOK.md) Step 3 covers it.
-2. **Until then, run the end-of-day prefilter.** Set `VCB_ALT_MARKET_PREFILTER_PROVIDER=yahoo`
+1. **If you cannot get an Alpaca key, use the preset above.** Yahoo plus your existing
+   Finnhub key reaches full data coverage and a real selection; Alpaca is only needed for
+   whole-market intraday discovery.
+2. **Fix Alpaca when you can.** It is the only option that does the whole-market sweep on
+   a free tier, the integration is written and tested, and the failure is a credential
+   mismatch rather than anything structural. [GO_LIVE_RUNBOOK.md](GO_LIVE_RUNBOOK.md) Step 3
+   covers it.
+3. **Details of the end-of-day prefilter.** Set `VCB_ALT_MARKET_PREFILTER_PROVIDER=yahoo`
    with an operator universe in `universe.csv` under `VCB_ALT_DATA_DIR`. No account, no key,
    no payment. Verified end to end on 2026-08-25: a five-symbol universe scored 58-96 and
    the portfolio selected three names totalling 62.95%.
@@ -50,7 +101,7 @@ meant for a curated universe rather than the whole market.
    - **It costs roughly a second per symbol**, since Yahoo answers one symbol per request.
      `VCB_ALT_PREFILTER_TIME_BUDGET_SECONDS` stops the run before it overruns a serverless
      execution limit and reports how many symbols were skipped.
-3. **If Alpaca cannot be recovered,** Polygon.io's full-market snapshot is the closest
+4. **If whole-market discovery is required,** Polygon.io's full-market snapshot is the closest
    replacement in shape, at a paid tier. Twelve Data is the cheapest workable option for a
    universe of a few hundred symbols.
 
