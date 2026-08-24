@@ -43,7 +43,7 @@ from .job_queue import (
     run_queued_scan_jobs,
     validate_job_limit,
 )
-from .market_universe import diagnose_alpaca_credentials, scan_market_universe
+from .market_universe import diagnose_alpaca_credentials, scan_market_universe, scan_pipeline_readiness
 from .models import OperationResult, SCORING_VERSION
 from .portfolio import select_portfolio
 from .provider_resilience import provider_alert_payload, provider_health_report
@@ -92,7 +92,13 @@ def handle_api(
     if method == "GET" and path == "/api/health":
         return OperationResult.success("OK", {"status": "healthy"})
     if method == "GET" and path == "/api/config":
-        return OperationResult.success("Configuration loaded.", doctor_report(config))
+        report = doctor_report(config)
+        try:
+            with connect(config) as conn:
+                report["scan_pipeline"] = scan_pipeline_readiness(config, conn)
+        except AppError:
+            report["scan_pipeline"] = scan_pipeline_readiness(config)
+        return OperationResult.success("Configuration loaded.", report)
     if method == "GET" and path == "/api/provider-status":
         return OperationResult.success("Provider status loaded.", provider_status(config))
     if method == "GET" and path == "/api/provider-health":

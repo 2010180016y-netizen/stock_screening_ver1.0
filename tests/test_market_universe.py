@@ -454,3 +454,59 @@ class CachedSelectionTests(unittest.TestCase):
             with self.assertRaises(NotFoundError) as caught:
                 market_universe.scan_market_universe(config, cached_only=True)
             self.assertIn("Run a market scan first", str(caught.exception))
+
+
+class ScanPipelineReadinessTests(unittest.TestCase):
+    """A config listing does not say whether a scan will reach a selection.
+
+    The enrichment stage is the one that is easy to miss: without it a scan still runs
+    and still scores, but coverage stays below the gate so the selected set is always
+    empty, with nothing in the configuration obviously wrong.
+    """
+
+    def test_default_install_reports_every_missing_stage(self) -> None:
+        from vcb_alt.market_universe import scan_pipeline_readiness
+
+        with tempfile.TemporaryDirectory() as tmp:
+            report = scan_pipeline_readiness(_prefilter_config(Path(tmp)))
+            self.assertFalse(report["ready_for_selection"])
+            self.assertEqual(report["universe"]["source"], "sample")
+            self.assertEqual(report["prefilter"]["provider"], "none")
+            self.assertEqual(report["enrichment"]["source"], "none")
+            self.assertEqual(len(report["blockers"]), 3)
+
+    def test_market_data_without_enrichment_is_still_not_ready(self) -> None:
+        from vcb_alt.db import add_watchlist, connect, init_db
+        from vcb_alt.market_universe import scan_pipeline_readiness
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config = _prefilter_config(Path(tmp), data_provider="yahoo", external_api_enabled=True)
+            with connect(config) as conn:
+                init_db(conn)
+                add_watchlist(conn, ["AAPL"])
+                report = scan_pipeline_readiness(config, conn)
+
+            self.assertTrue(report["universe"]["ready"])
+            self.assertTrue(report["prefilter"]["ready"])
+            self.assertFalse(report["enrichment"]["ready"])
+            self.assertFalse(report["ready_for_selection"])
+            self.assertTrue(any("enrichment" in blocker for blocker in report["blockers"]))
+
+    def test_documented_preset_is_ready(self) -> None:
+        from vcb_alt.db import add_watchlist, connect, init_db
+        from vcb_alt.market_universe import scan_pipeline_readiness
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config = _prefilter_config(
+                Path(tmp), data_provider="yahoo", external_api_enabled=True,
+                research_data_provider="finnhub", finnhub_api_key="test-key",
+            )
+            with connect(config) as conn:
+                init_db(conn)
+                add_watchlist(conn, ["AAPL"])
+                report = scan_pipeline_readiness(config, conn)
+
+            self.assertTrue(report["ready_for_selection"])
+            self.assertEqual(report["universe"]["source"], "watchlist")
+            self.assertEqual(report["enrichment"]["source"], "finnhub")
+            self.assertEqual(report["blockers"], [])

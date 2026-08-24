@@ -169,6 +169,32 @@ drill. Do not treat this runbook as clearing those.
 
 ---
 
+## Step 4b - Confirm the scan can actually reach a selection
+
+Settings can all look right while the scan still selects nothing, because market data
+alone reaches about 35/100 data coverage and 60 is required. Ask the app directly:
+
+```bash
+curl -s "https://<YOUR-URL>/api/config" -H "Authorization: Bearer <ACCESS-TOKEN>"
+```
+
+**Expected result:** inside `scan_pipeline`,
+
+```json
+"ready_for_selection": true,
+"universe":   {"source": "watchlist", "ready": true},
+"prefilter":  {"provider": "yahoo",   "ready": true},
+"enrichment": {"source": "finnhub",   "ready": true}
+```
+
+**If it is false,** `blockers` names each missing stage and the setting that fixes it.
+Locally the same check is `python -m vcb_alt doctor`.
+
+This works without Alpaca. See
+[MARKET_DATA_PROVIDERS.md](MARKET_DATA_PROVIDERS.md) for the full no-Alpaca preset.
+
+---
+
 ## Step 5 — Run one real market scan
 
 In production, pressing **Scan full market** does not scan immediately. It asks a

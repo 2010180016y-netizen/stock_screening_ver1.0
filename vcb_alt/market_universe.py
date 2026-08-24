@@ -18,9 +18,9 @@ from .db import list_watchlist
 from .models import EvaluationResult, PortfolioSelection, StockSnapshot
 from .portfolio import select_portfolio
 from .provider_resilience import ProviderFailure, provider_request_json, provider_request_text
-from .providers import apply_research_enrichment, get_price_history, get_snapshot
+from .providers import apply_research_enrichment, enrichment_snapshot_path, get_price_history, get_snapshot
 from .sample_data import SAMPLE_TICKERS
-from .scoring import evaluate_snapshot
+from .scoring import MIN_DATA_COVERAGE_FOR_ENTRY, evaluate_snapshot
 from .validation import validate_ticker
 
 ALPACA_TRADING_BASE_URLS = ("https://paper-api.alpaca.markets", "https://api.alpaca.markets")
@@ -104,6 +104,56 @@ def market_universe_path(config: AppConfig) -> Path:
         return preferred
     legacy = config.root_dir / "data" / "universe.csv"
     return legacy if legacy.exists() else preferred
+
+
+def scan_pipeline_readiness(config: AppConfig, conn: Any | None = None) -> dict[str, Any]:
+    """Answer the question a config listing does not: will a scan reach a selection?
+
+    The three stages fail for different reasons and only the last one is easy to miss:
+    without enrichment a scan still runs and still scores, but price and volume alone cap
+    data coverage below the selection gate, so the result is always an empty selected set.
+    """
+    blockers: list[str] = []
+
+    universe_source = "sample"
+    if _alpaca_configured(config) and config.market_universe_provider in {"auto", "alpaca"}:
+        universe_source = "alpaca"
+    elif market_universe_path(config).exists() and config.market_universe_provider in {"auto", "csv"}:
+        universe_source = "csv"
+    elif conn is not None and config.market_universe_provider in {"auto", "watchlist"} and _load_watchlist_universe(conn):
+        universe_source = "watchlist"
+    if universe_source == "sample":
+        blockers.append(
+            "No real universe: add tickers to the watchlist, supply universe.csv, or configure Alpaca. "
+            "Sample data is demo output and must not be treated as a recommendation."
+        )
+
+    prefilter_provider = _resolve_prefilter_provider(config)
+    if prefilter_provider == "none":
+        blockers.append(
+            "No prefilter provider: set VCB_ALT_MARKET_PREFILTER_PROVIDER=yahoo with "
+            "VCB_ALT_EXTERNAL_API_ENABLED=true, or configure Alpaca."
+        )
+
+    enrichment_source = "none"
+    if config.research_data_provider.startswith("finnhub") and config.finnhub_api_key:
+        enrichment_source = "finnhub"
+    elif config.research_data_provider in {"csv", "finnhub_csv"} and enrichment_snapshot_path(config).exists():
+        enrichment_source = "csv"
+    if enrichment_source == "none":
+        blockers.append(
+            f"No research enrichment: market data alone reaches about 35/100 data coverage and "
+            f"{MIN_DATA_COVERAGE_FOR_ENTRY} is required, so nothing can be selected. Set "
+            "VCB_ALT_RESEARCH_DATA_PROVIDER=finnhub with a key, or supply enrichment.csv."
+        )
+
+    return {
+        "ready_for_selection": not blockers,
+        "universe": {"source": universe_source, "ready": universe_source != "sample"},
+        "prefilter": {"provider": prefilter_provider, "ready": prefilter_provider != "none"},
+        "enrichment": {"source": enrichment_source, "ready": enrichment_source != "none"},
+        "blockers": blockers,
+    }
 
 
 def scan_market_universe(

@@ -27,7 +27,7 @@ from .db import (
 from .errors import AppError
 from .job_queue import run_queued_scan_jobs, validate_job_limit
 from .logging_utils import append_file_log
-from .market_universe import scan_market_universe
+from .market_universe import scan_market_universe, scan_pipeline_readiness
 from .models import OperationResult
 from .performance import benchmark_scoring
 from .portfolio import select_portfolio
@@ -161,7 +161,16 @@ def dispatch(args: argparse.Namespace) -> OperationResult:
     config = load_config()
 
     if args.command == "doctor":
-        return OperationResult.success("Configuration check completed.", doctor_report(config))
+        report = doctor_report(config)
+        # Listing settings does not tell an operator whether a scan will reach a
+        # selection. Open a connection when one exists so the watchlist counts as a
+        # universe, but never fail the check just because the database is not there yet.
+        try:
+            with connect(config) as conn:
+                report["scan_pipeline"] = scan_pipeline_readiness(config, conn)
+        except Exception:
+            report["scan_pipeline"] = scan_pipeline_readiness(config)
+        return OperationResult.success("Configuration check completed.", report)
 
     if args.command == "saas-readiness":
         data = get_saas_readiness()
