@@ -302,6 +302,7 @@ is not ready to ship. Implementation handoff notes are in [codex_handoff/](codex
 ## Research And Planning
 
 - [Deep system research](docs/research.md): current architecture, runtime flow, provider behavior, scoring, web/API, operations, risks, and scaling constraints.
+- [Market data provider options](docs/MARKET_DATA_PROVIDERS.md): what each provider can supply, and the keyless end-of-day prefilter that keeps the scan working without Alpaca.
 - [Go-live runbook](docs/GO_LIVE_RUNBOOK.md): the single procedure to follow when re-issuing Alpaca credentials — token rotation, environment variables, credential diagnostics, one verified live scan, the hosted 1000-user gate, and rollback.
 - [Operator trial guide](docs/OPERATOR_TRIAL_GUIDE.md): owner pre-user usage URL, workflow checklist, provider mode, and public-launch blockers.
 - [Provider keys setup](docs/PROVIDER_KEYS_SETUP.md): safe Vercel/local setup for Alpaca, Finnhub, SEC, and OpenAI keys.

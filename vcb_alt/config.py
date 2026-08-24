@@ -85,6 +85,8 @@ class AppConfig:
     market_universe_provider: str = "auto"
     market_universe_max_symbols: int = 5000
     market_prefilter_limit: int = 30
+    market_prefilter_provider: str = "auto"
+    yahoo_prefilter_max_symbols: int = 150
     market_snapshot_batch_size: int = 100
     market_scan_requires_live_data: bool = False
 
@@ -270,6 +272,13 @@ def load_config(root_dir: Path | None = None) -> AppConfig:
         get("MARKET_PREFILTER_LIMIT", "30"),
         "MARKET_PREFILTER_LIMIT",
     )
+    market_prefilter_provider = get("MARKET_PREFILTER_PROVIDER", "auto").lower()
+    if market_prefilter_provider not in {"auto", "alpaca", "yahoo", "none"}:
+        raise ValidationError("MARKET_PREFILTER_PROVIDER must be one of: auto, alpaca, yahoo, none.")
+    yahoo_prefilter_max_symbols = _parse_positive_int(
+        get("YAHOO_PREFILTER_MAX_SYMBOLS", "150"),
+        "YAHOO_PREFILTER_MAX_SYMBOLS",
+    )
     market_snapshot_batch_size = _parse_positive_int(
         get("MARKET_SNAPSHOT_BATCH_SIZE", "100"),
         "MARKET_SNAPSHOT_BATCH_SIZE",
@@ -349,6 +358,8 @@ def load_config(root_dir: Path | None = None) -> AppConfig:
         market_universe_provider=market_universe_provider,
         market_universe_max_symbols=market_universe_max_symbols,
         market_prefilter_limit=market_prefilter_limit,
+        market_prefilter_provider=market_prefilter_provider,
+        yahoo_prefilter_max_symbols=yahoo_prefilter_max_symbols,
         market_snapshot_batch_size=market_snapshot_batch_size,
         market_scan_requires_live_data=market_scan_requires_live_data,
     )
@@ -410,6 +421,7 @@ def doctor_report(config: AppConfig) -> dict[str, Any]:
         "market_universe_provider": config.market_universe_provider,
         "market_universe_max_symbols": config.market_universe_max_symbols,
         "market_prefilter_limit": config.market_prefilter_limit,
+        "market_prefilter_provider": config.market_prefilter_provider,
         "market_snapshot_batch_size": config.market_snapshot_batch_size,
         "market_scan_requires_live_data": config.market_scan_requires_live_data,
         "warnings": warnings,

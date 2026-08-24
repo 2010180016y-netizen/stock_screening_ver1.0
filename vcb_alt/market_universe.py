@@ -17,7 +17,7 @@ from .errors import AppError, ValidationError
 from .models import EvaluationResult, PortfolioSelection, StockSnapshot
 from .portfolio import select_portfolio
 from .provider_resilience import ProviderFailure, provider_request_json, provider_request_text
-from .providers import apply_research_enrichment, get_snapshot
+from .providers import apply_research_enrichment, get_price_history, get_snapshot
 from .sample_data import SAMPLE_TICKERS
 from .scoring import evaluate_snapshot
 from .validation import validate_ticker
@@ -234,11 +234,17 @@ def prefilter_market_candidates(
     selected_limit = limit or config.market_prefilter_limit
     if not entries:
         return [], {"source": "none", "count": 0, "warnings": ["Universe is empty."]}
-    if not _alpaca_configured(config):
+    provider = _resolve_prefilter_provider(config)
+    if provider == "yahoo":
+        return _yahoo_prefilter_candidates(config, entries, selected_limit)
+    if provider != "alpaca":
         return [], {
             "source": "unavailable",
             "count": 0,
-            "warnings": ["Alpaca credentials/external API access are required for real-time market prefiltering."],
+            "warnings": [
+                "No market prefilter provider is available. Configure Alpaca for intraday snapshots, "
+                "or set VCB_ALT_MARKET_PREFILTER_PROVIDER=yahoo to rank on end-of-day bars without a key."
+            ],
         }
 
     candidates: list[PrefilterCandidate] = []
@@ -280,6 +286,110 @@ def prefilter_market_candidates(
         "failures": failures[:10],
         "warnings": [] if candidates else ["No usable Alpaca snapshots were returned for the universe."],
     }
+
+
+def _resolve_prefilter_provider(config: AppConfig) -> str:
+    """Pick the provider that ranks the universe down to a handful of candidates.
+
+    Alpaca was the only option, and it is the single choke point that makes the whole
+    scan return nothing when its credentials fail: no prefilter means no candidates,
+    however healthy every other provider is. "yahoo" trades intraday freshness for
+    working without any credential at all.
+    """
+    requested = config.market_prefilter_provider
+    if requested == "alpaca":
+        return "alpaca"
+    if requested == "yahoo":
+        return "yahoo"
+    if requested == "none":
+        return "none"
+    if _alpaca_configured(config):
+        return "alpaca"
+    if config.external_api_enabled and config.data_provider in {"yahoo", "yahoo_chart"}:
+        return "yahoo"
+    return "none"
+
+
+def _yahoo_prefilter_candidates(
+    config: AppConfig,
+    entries: list[UniverseEntry],
+    selected_limit: int,
+) -> tuple[list[PrefilterCandidate], dict[str, Any]]:
+    """Rank the universe on end-of-day bars, one request per symbol.
+
+    Alpaca returns hundreds of symbols per request; Yahoo does not, so this path is
+    capped and is meant for an operator CSV universe rather than a 5000-symbol sweep.
+    The candidates it produces carry no bid/ask, so spread is reported as zero and the
+    source is labelled end-of-day - the data-quality gate still decides what may reach
+    the final selection.
+    """
+    cap = max(1, min(config.yahoo_prefilter_max_symbols, len(entries)))
+    scanned = entries[:cap]
+    candidates: list[PrefilterCandidate] = []
+    failures: list[dict[str, Any]] = []
+    for entry in scanned:
+        try:
+            history = get_price_history(config, entry.ticker, years=1)
+        except AppError as exc:
+            failures.append({"ticker": entry.ticker, "code": exc.code, "message": exc.message})
+            if config.market_scan_requires_live_data and isinstance(exc, ProviderFailure):
+                raise
+            continue
+        candidate = _candidate_from_daily_points(entry, history)
+        if candidate is not None:
+            candidates.append(candidate)
+
+    candidates.sort(key=_prefilter_sort_key)
+    candidates = candidates[:selected_limit]
+    warnings: list[str] = [
+        "End-of-day prefilter: ranking uses the last two daily bars, not live intraday quotes."
+    ]
+    if len(entries) > cap:
+        warnings.append(
+            f"Only the first {cap} of {len(entries)} universe symbols were ranked "
+            "(VCB_ALT_YAHOO_PREFILTER_MAX_SYMBOLS)."
+        )
+    if not candidates:
+        warnings.append("No usable end-of-day bars were returned for the universe.")
+    return candidates, {
+        "source": "yahoo:eod",
+        "count": len(candidates),
+        "scanned_symbols": len(scanned),
+        "prefilter_limit": selected_limit,
+        "failures": failures[:10],
+        "warnings": warnings,
+    }
+
+
+def _candidate_from_daily_points(entry: UniverseEntry, history: dict[str, Any]) -> PrefilterCandidate | None:
+    points = history.get("points") or []
+    if len(points) < 2:
+        return None
+    latest, previous = points[-1], points[-2]
+    price = float(latest.get("close") or 0.0)
+    previous_close = float(previous.get("close") or 0.0)
+    if price <= 0 or previous_close <= 0:
+        return None
+    volume = float(latest.get("volume") or 0.0)
+    previous_volume = float(previous.get("volume") or 0.0)
+    change_pct = ((price - previous_close) / previous_close) * 100
+    volume_ratio = volume / previous_volume if volume and previous_volume else 1.0
+    as_of = str(latest.get("date") or "")
+    return PrefilterCandidate(
+        ticker=entry.ticker,
+        company_name=entry.name or entry.ticker,
+        exchange=entry.exchange,
+        latest_price=round(price, 4),
+        previous_close=round(previous_close, 4),
+        intraday_change_pct=round(change_pct, 2),
+        intraday_volume=round(volume, 2),
+        breakout_volume_ratio=round(volume_ratio, 2),
+        spread_bps=0.0,
+        prefilter_score=_prefilter_score(change_pct, volume_ratio, volume, price, 0.0),
+        source="yahoo:eod",
+        data_as_of=as_of,
+        freshness_seconds=round(_iso_age_seconds(as_of), 2),
+    )
 
 
 def diagnose_alpaca_credentials(config: AppConfig, *, symbol: str = "AAPL") -> dict[str, Any]:

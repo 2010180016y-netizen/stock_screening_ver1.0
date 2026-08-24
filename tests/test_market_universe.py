@@ -10,10 +10,14 @@ from unittest.mock import patch
 
 from vcb_alt.config import AppConfig
 from vcb_alt.errors import ValidationError
+from vcb_alt import market_universe
 from vcb_alt.market_universe import (
     UNIVERSE_CACHE_VERSION,
+    UniverseEntry,
     _market_scan_report_cache_path,
+    _resolve_prefilter_provider,
     diagnose_alpaca_credentials,
+    prefilter_market_candidates,
     scan_market_universe,
 )
 
@@ -191,3 +195,125 @@ class _FakeAlpacaResponse:
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _prefilter_config(root: Path, **overrides: object) -> AppConfig:
+    base = {
+        "database_url": "sqlite:///./data/test.db",
+        "log_level": "INFO",
+        "timezone": "Asia/Seoul",
+        "data_provider": "sample",
+        "external_api_enabled": False,
+        "root_dir": root,
+        "data_dir": root / "data",
+        "log_dir": root / "logs",
+    }
+    base.update(overrides)
+    return AppConfig(**base)  # type: ignore[arg-type]
+
+
+def _fake_history(_config: object, ticker: str, years: int = 1) -> dict[str, object]:
+    table = {
+        "AAPL": (100.0, 101.0, 1_000_000.0, 1_100_000.0),
+        "NVDA": (100.0, 112.0, 1_000_000.0, 4_000_000.0),
+        "KO": (100.0, 99.5, 1_000_000.0, 900_000.0),
+    }
+    previous_close, close, previous_volume, volume = table[ticker]
+    return {
+        "ticker": ticker,
+        "source": "yahoo",
+        "points": [
+            {"date": "2026-08-21", "close": previous_close, "volume": previous_volume},
+            {"date": "2026-08-22", "close": close, "volume": volume},
+        ],
+    }
+
+
+class PrefilterProviderTests(unittest.TestCase):
+    """The prefilter used to be Alpaca-only, which made it the single point of failure.
+
+    With no prefilter the scan returns nothing no matter how healthy the other
+    providers are, which is exactly what a bad Alpaca credential produced.
+    """
+
+    def test_provider_resolution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(_resolve_prefilter_provider(_prefilter_config(root)), "none")
+            self.assertEqual(
+                _resolve_prefilter_provider(
+                    _prefilter_config(root, data_provider="yahoo", external_api_enabled=True)
+                ),
+                "yahoo",
+            )
+            self.assertEqual(
+                _resolve_prefilter_provider(
+                    _prefilter_config(
+                        root, external_api_enabled=True, alpaca_api_key="k", alpaca_api_secret="s"
+                    )
+                ),
+                "alpaca",
+            )
+            # An explicit choice always wins over the automatic one.
+            self.assertEqual(
+                _resolve_prefilter_provider(
+                    _prefilter_config(
+                        root,
+                        market_prefilter_provider="none",
+                        external_api_enabled=True,
+                        alpaca_api_key="k",
+                        alpaca_api_secret="s",
+                    )
+                ),
+                "none",
+            )
+
+    def test_yahoo_prefilter_ranks_candidates_without_any_credential(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = _prefilter_config(Path(tmp), data_provider="yahoo", external_api_enabled=True)
+            entries = [
+                UniverseEntry(ticker=ticker, name=ticker, exchange="NASDAQ", source="csv")
+                for ticker in ("AAPL", "NVDA", "KO")
+            ]
+            with patch.object(market_universe, "get_price_history", side_effect=_fake_history):
+                candidates, meta = prefilter_market_candidates(config, entries, limit=2)
+
+            self.assertEqual(meta["source"], "yahoo:eod")
+            self.assertEqual([item.ticker for item in candidates], ["NVDA", "AAPL"])
+            self.assertEqual(candidates[0].intraday_change_pct, 12.0)
+            self.assertEqual(candidates[0].breakout_volume_ratio, 4.0)
+            # No bid/ask exists in daily bars, and the label must say end-of-day.
+            self.assertEqual(candidates[0].spread_bps, 0.0)
+            self.assertIn("end-of-day", meta["warnings"][0].lower())
+            # The scoring pipeline must accept what this path produces.
+            self.assertEqual(market_universe._snapshot_from_prefilter(candidates[0]).ticker, "NVDA")
+
+    def test_yahoo_prefilter_caps_the_number_of_symbols_it_fetches(self) -> None:
+        """One request per symbol, so an unbounded universe would be a request storm."""
+        with tempfile.TemporaryDirectory() as tmp:
+            config = _prefilter_config(
+                Path(tmp),
+                data_provider="yahoo",
+                external_api_enabled=True,
+                yahoo_prefilter_max_symbols=2,
+            )
+            entries = [
+                UniverseEntry(ticker=ticker, name=ticker, exchange="NASDAQ", source="csv")
+                for ticker in ("AAPL", "NVDA", "KO")
+            ]
+            with patch.object(market_universe, "get_price_history", side_effect=_fake_history) as fetch:
+                _, meta = prefilter_market_candidates(config, entries)
+
+            self.assertEqual(fetch.call_count, 2)
+            self.assertEqual(meta["scanned_symbols"], 2)
+            self.assertTrue(any("first 2 of 3" in warning for warning in meta["warnings"]))
+
+    def test_no_provider_explains_both_ways_out(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = _prefilter_config(Path(tmp))
+            entries = [UniverseEntry(ticker="AAPL", name="Apple", exchange="NASDAQ", source="csv")]
+            candidates, meta = prefilter_market_candidates(config, entries)
+            self.assertEqual(candidates, [])
+            self.assertEqual(meta["source"], "unavailable")
+            self.assertIn("Alpaca", meta["warnings"][0])
+            self.assertIn("VCB_ALT_MARKET_PREFILTER_PROVIDER=yahoo", meta["warnings"][0])
