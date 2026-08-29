@@ -1,8 +1,12 @@
 # CODEX_TASKS.md
 
+> **모든 티켓 완료 (2026-08).** 이 문서는 무엇을 왜 바꿨는지에 대한 기록으로 남깁니다.
+> 현재 상태는 [../README.md](../README.md)와 [../RELEASE_DECISION.md](../RELEASE_DECISION.md)를 보세요.
+> Task 6은 Task 7b에서 함께 해소됐고, Task 7a는 Task 4(CI)와 함께 처리됐습니다.
+
 실행 순서: Task 1 → 2 → 3 → 4 (Phase 0) → 5 → 6 (Phase 1) → 7 → 8 (Phase 2) → 9~13.
-검증 인터프리터: `$py = 'C:\stable-diffusion-ui\installer_files\env\python.exe'` (이 머신에 `python`이 PATH에 없음).
-공통 검증 4종: `& $py -m unittest discover -s tests` / `& $py tools\lint.py` / `& $py tools\typecheck.py` / `& $py -m compileall vcb_alt tests tools api`
+검증 인터프리터: PATH의 `python` (3.11.9). 초기 문서가 안내하던 `C:\stable-diffusion-ui\installer_files\env\python.exe`는 존재하지 않습니다.
+공통 검증: `python -m unittest discover -s tests` / `python tools\lint.py` / `python tools\typecheck.py` / `python tools\secret_scan.py` / `python tools\check_docs.py` / `python -m compileall vcb_alt tests tools api`
 
 ---
 
@@ -118,7 +122,7 @@
 * Files to inspect first: `vcb_alt/web_assets/app.js`의 `runScan()`(619행 부근), `api()`(199행), `setBusy`(410행 부근); `vcb_alt/web.py`에서 `/api/user/scan` 핸들러와 202 응답 바디 스키마; `vcb_alt/job_queue.py`의 잡 상태 필드.
 * Files likely to change: `vcb_alt/web_assets/app.js`, `app.css`, `index.html` (+ `web.py`의 잡 상태 조회 API가 없으면 확인 필요로 보고)
 * Detailed instructions for Codex:
-  1. 먼저 202 응답 바디와 잡 상태 조회 경로(예: `/api/user/scan-jobs/{id}` 유사 — 정확한 경로는 web.py에서 확인)를 파악해 보고에 기록한다.
+  1. 먼저 202 응답 바디와 잡 상태 조회 경로(`/api/jobs/market-scan/{id}` — 구현 시 확인됨)를 파악해 보고에 기록한다.
   2. `runScan()`에서 응답이 202/pending이면: 버튼은 disabled 유지, 상태 배지에 "스캔 대기열에 등록됨 — 최신 스냅샷 준비 중"(EN/KO), 5초 간격 폴링(최대 12회) 후 완료 시 결과 렌더, 타임아웃 시 "아직 준비 중입니다. 잠시 후 새로고침" 안내.
   3. 폴링 중 페이지 이탈/재클릭 안전 처리(중복 타이머 금지).
   4. 모든 신규 문자열은 `I18N`에 EN/KO 쌍으로 추가.

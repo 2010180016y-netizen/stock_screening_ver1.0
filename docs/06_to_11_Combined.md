@@ -1,5 +1,13 @@
 # VCB-Alt v3.0 — Deployment & Operation Guide
 
+> **Design target, not a description of the build.** This is one of the original
+> "VCB-Alt v3.0" specification documents from 2026-05. The shipped package is version
+> 0.1.0 and does not implement everything described here - some CLI commands and API
+> paths named below (`calibrate`, `evening`, `/api/v3/`, and others) do not exist.
+> For what the software actually does today, read [../README.md](../README.md),
+> [../RELEASE_DECISION.md](../RELEASE_DECISION.md) and
+> [MARKET_DATA_PROVIDERS.md](MARKET_DATA_PROVIDERS.md).
+
 ## 1. Phase 1 Deployment (Personal, Local)
 
 ### 1.1 System Requirements

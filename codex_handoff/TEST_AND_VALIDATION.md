@@ -1,5 +1,9 @@
 # TEST_AND_VALIDATION.md
 
+> **기록 문서 (2026-08 작업 완료).** 이 패키지는 재설계 착수 시점의 진단과 계획입니다.
+> 이후 티켓 13개가 모두 수행되어 아래 내용 중 다수는 더 이상 현재 상태가 아닙니다.
+> 현재 상태는 [../README.md](../README.md)와 [../RELEASE_DECISION.md](../RELEASE_DECISION.md)를 보세요.
+
 모든 명령은 이 Windows 머신 기준. **인터프리터는 PATH의 `python`(3.11.9)을 쓴다.** 저장소 문서가 안내하는 `C:\stable-diffusion-ui\installer_files\env\python.exe`는 2026-07-06 기준 존재하지 않는다(Task 1에서 확인). 아래 문서의 `& $py`는 전부 `python`으로 읽는다.
 
 ```powershell

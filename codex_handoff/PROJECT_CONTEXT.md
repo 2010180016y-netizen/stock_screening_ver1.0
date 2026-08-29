@@ -1,5 +1,9 @@
 # PROJECT_CONTEXT.md
 
+> **기록 문서 (2026-08 작업 완료).** 이 패키지는 재설계 착수 시점의 진단과 계획입니다.
+> 이후 티켓 13개가 모두 수행되어 아래 내용 중 다수는 더 이상 현재 상태가 아닙니다.
+> 현재 상태는 [../README.md](../README.md)와 [../RELEASE_DECISION.md](../RELEASE_DECISION.md)를 보세요.
+
 조사 기준일: 2026-07-06. 아래 내용은 Fable이 실제 파일·명령 실행으로 확인한 사실이다. 추정은 Assumptions 섹션에 분리했다.
 
 ## What This Project Is

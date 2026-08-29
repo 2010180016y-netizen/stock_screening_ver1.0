@@ -323,6 +323,10 @@ def get_manual_snapshot(config: AppConfig, ticker_value: str) -> StockSnapshot:
     return snapshots[ticker]
 
 
+# Memoised for the life of the process and keyed only on the path, so a long-running
+# server keeps serving the copy it read first. Editing snapshots.csv takes effect on
+# the next restart; that is fine for an operator file that changes rarely, and it
+# keeps a scan from re-reading the same CSV once per ticker.
 @lru_cache(maxsize=8)
 def _load_manual_snapshots(path_value: str) -> dict[str, StockSnapshot]:
     path = Path(path_value)
@@ -789,6 +793,8 @@ def apply_csv_enrichment(config: AppConfig, snapshot: StockSnapshot) -> StockSna
     return _apply_enrichment_values(snapshot, values, str(values.get("enrichment_source") or "data/enrichment.csv"))
 
 
+# Same trade-off as _load_manual_snapshots: cached per process, so an edited
+# enrichment.csv needs a restart to be picked up.
 @lru_cache(maxsize=8)
 def _load_enrichment_rows(path_value: str) -> dict[str, dict[str, Any]]:
     path = Path(path_value)
@@ -1119,26 +1125,14 @@ def _load_yahoo_bars(
     range_value: str = "1y",
     config: AppConfig | None = None,
 ) -> tuple[list[MarketBar], str | None]:
-    if config is not None:
-        return _load_yahoo_bars_with_config(data_dir_value, ticker, timeout_seconds, cache_ttl_hours, range_value, config)
-    return _load_yahoo_bars_cached(
-        data_dir_value,
-        ticker,
-        timeout_seconds,
-        cache_ttl_hours,
-        range_value,
-        _ttl_bucket(cache_ttl_hours),
-    )
+    """Load daily bars, preferring the on-disk cache over a network fetch.
 
-
-def _load_yahoo_bars_with_config(
-    data_dir_value: str,
-    ticker: str,
-    timeout_seconds: float,
-    cache_ttl_hours: float,
-    range_value: str,
-    config: AppConfig,
-) -> tuple[list[MarketBar], str | None]:
+    There used to be a second, process-memoised copy of this for callers without a
+    config. Every caller passes one, so that copy only ever ran from its own test while
+    the real path stayed uncached. Re-parsing a cached file measures at under a
+    millisecond against a network fetch of roughly a second, so one uncached
+    implementation is both simpler and fast enough.
+    """
     cache_path = _yahoo_cache_path(Path(data_dir_value), ticker, range_value)
     json_text = _read_fresh_cache(cache_path, cache_ttl_hours)
     if json_text is not None:
@@ -1147,30 +1141,6 @@ def _load_yahoo_bars_with_config(
         except AppError:
             cache_path.unlink(missing_ok=True)
     json_text = _fetch_yahoo_chart_json(ticker, timeout_seconds, range_value, config)
-    parsed = _parse_yahoo_chart_json(json_text, ticker)
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    cache_path.write_text(json_text, encoding="utf-8")
-    return parsed
-
-
-@lru_cache(maxsize=1024)
-def _load_yahoo_bars_cached(
-    data_dir_value: str,
-    ticker: str,
-    timeout_seconds: float,
-    cache_ttl_hours: float,
-    range_value: str,
-    ttl_bucket: int,
-) -> tuple[list[MarketBar], str | None]:
-    del ttl_bucket
-    cache_path = _yahoo_cache_path(Path(data_dir_value), ticker, range_value)
-    json_text = _read_fresh_cache(cache_path, cache_ttl_hours)
-    if json_text is not None:
-        try:
-            return _parse_yahoo_chart_json(json_text, ticker)
-        except AppError:
-            cache_path.unlink(missing_ok=True)
-    json_text = _fetch_yahoo_chart_json(ticker, timeout_seconds, range_value)
     parsed = _parse_yahoo_chart_json(json_text, ticker)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     cache_path.write_text(json_text, encoding="utf-8")

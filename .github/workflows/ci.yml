@@ -47,6 +47,11 @@ jobs:
       - name: Lint
         run: python tools/lint.py
 
+      - name: Documentation matches the code
+        # Docs drift silently: a setting is renamed, a command removed, an endpoint moved,
+        # and the file telling an operator what to type keeps saying the old thing.
+        run: python tools/check_docs.py
+
       - name: Type hints
         run: python tools/typecheck.py
 

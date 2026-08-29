@@ -2,7 +2,7 @@
 
 Local-first US stock screening decision-support CLI and token-protected web dashboard.
 
-VCB-Alt scans a configured US-equity market universe, prefilters live/near-live movers, enriches the strongest candidates, scores them across seven stock archetypes, and surfaces a small decision-support candidate set through deterministic scoring and portfolio constraints. User watchlists remain as a manual research aid, not the primary discovery engine. The app does not place trades and does not call external market-data providers unless explicitly enabled.
+VCB-Alt scans a configured US-equity market universe, prefilters live/near-live movers, enriches the strongest candidates, scores them across seven stock archetypes, and surfaces a small decision-support candidate set through deterministic scoring and portfolio constraints. When no Alpaca universe or operator CSV is configured, the watchlist supplies the universe, so the dashboard sidebar is how you choose what gets scanned. The app does not place trades and does not call external market-data providers unless explicitly enabled.
 
 ## Major Features
 
@@ -14,6 +14,7 @@ VCB-Alt scans a configured US-equity market universe, prefilters live/near-live 
 - Manual CSV data provider for operator-supplied real snapshots
 - Yahoo chart and optional Stooq end-of-day market-data providers with local cache
 - Optional Alpaca active-asset universe and near-real-time multi-symbol snapshot prefilter with a short TTL cache
+- Keyless end-of-day prefilter that ranks the universe on daily bars when Alpaca is unavailable, bounded by a wall-clock budget
 - Technical Momentum scoring for automatic market data with a data-quality gate that blocks chart-only final selections
 - Optional `data/enrichment.csv` overlay for fundamentals, catalysts, short/options, insider, float, and related context
 - Optional Finnhub research-data provider for fundamentals, earnings surprise, news catalysts, analyst trends, short interest, options open interest, and insider transactions
@@ -102,7 +103,7 @@ VCB_ALT_GLOBAL_OPERATOR_EMAILS=
 ```
 
 `sample` is the safe offline default. `manual` reads `data/snapshots.csv`. `yahoo` fetches end-of-day chart data and requires `VCB_ALT_EXTERNAL_API_ENABLED=true`. `stooq` is also supported, but some Stooq downloads require an API key/captcha flow.
-`VCB_ALT_SCAN_MODE=market_universe` is the intended product mode. It scans the configured universe instead of only user-entered watchlist symbols. Set `VCB_ALT_MARKET_SCAN_REQUIRES_LIVE_DATA=true` in production so the app fails closed when live Alpaca snapshots are unavailable.
+`VCB_ALT_SCAN_MODE=market_universe` is the intended product mode. It scans the configured universe (Alpaca assets, `universe.csv`, or the watchlist) instead of evaluating only the tickers a user typed. Set `VCB_ALT_MARKET_SCAN_REQUIRES_LIVE_DATA=true` in production so the app fails closed when live Alpaca snapshots are unavailable.
 `VCB_ALT_AUTO_SEED_SAMPLE=true` only seeds the legacy/local watchlist flow. It is ignored for `market_universe` and production SaaS core flows; starter tickers appear only as an optional manual research helper.
 Provider-heavy paths use timeout, retry, quota-budget, and circuit-breaker guards. Operators can inspect `/api/provider-health` and `/api/admin/provider-alerts` without exposing API keys.
 For production SaaS, set `VCB_ALT_ALLOW_QUERY_TOKEN_AUTH=false`; production mode forces query-token auth off so `?token=` and `?worker_token=` cannot become public access paths. Set `VCB_ALT_TRUSTED_PROXY_HEADERS=true` only behind a trusted proxy that sanitizes `X-Forwarded-For`. Use `VCB_ALT_GLOBAL_OPERATOR_EMAILS` or `operator`/`global_operator` roles for cross-tenant provider alert visibility.
@@ -121,6 +122,11 @@ python tools\queue_load_test.py --users 1000 --tickers 30 --worker-limit 100
 python -m vcb_alt web --host 127.0.0.1 --port 8765
 python -m vcb_alt admin logs
 python -m vcb_alt admin failures
+
+# Aliases and worker commands
+python -m vcb_alt morning          # alias for scan
+python -m vcb_alt weekly           # alias for scan
+python -m vcb_alt worker run-once  # process queued scan jobs once
 ```
 
 `python -m vcb_alt scan` follows `VCB_ALT_SCAN_MODE`. Use `python -m vcb_alt scan --watchlist` only for the legacy/manual ticker list flow.
@@ -293,8 +299,11 @@ These drafts are operational placeholders and require legal review before public
 
 ## Repository Layout
 
-Reference documentation lives in [docs/](docs). The repository root keeps only the five
-files needed to start working: this README, [CHANGELOG.md](CHANGELOG.md),
+Reference documentation lives in [docs/](docs). Two kinds of document live there and
+they must not be read the same way: the numbered `00`-`06` files are the original
+"VCB-Alt v3.0" design target from 2026-05 and describe features that were never built,
+while everything else describes the software as it is. Each design document now carries a
+banner saying so. The repository root keeps only the five files needed to start working: this README, [CHANGELOG.md](CHANGELOG.md),
 [SETUP.md](SETUP.md), [TESTING.md](TESTING.md), and
 [RELEASE_DECISION.md](RELEASE_DECISION.md) — the authoritative statement of what is and
 is not ready to ship. Implementation handoff notes are in [codex_handoff/](codex_handoff).

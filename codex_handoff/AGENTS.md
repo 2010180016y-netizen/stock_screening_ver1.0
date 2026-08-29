@@ -1,5 +1,9 @@
 # AGENTS.md
 
+> **기록 문서 (2026-08 작업 완료).** 이 패키지는 재설계 착수 시점의 진단과 계획입니다.
+> 이후 티켓 13개가 모두 수행되어 아래 내용 중 다수는 더 이상 현재 상태가 아닙니다.
+> 현재 상태는 [../README.md](../README.md)와 [../RELEASE_DECISION.md](../RELEASE_DECISION.md)를 보세요.
+
 ## Project Mission
 
 VCB-Alt는 미국 주식 시장 전체를 스캔해 7개 종목 유형(archetype) 기준으로 결정지원(decision-support) 후보 종목을 골라주는 개인용/운영자용 도구다. Python 3.11 표준 라이브러리 중심의 CLI + 토큰 보호 웹 대시보드로 구성되며, 로컬은 SQLite, 프로덕션(Vercel + Neon PostgreSQL)은 SaaS 시험 운영(operator trial) 단계다. 자동 매매는 하지 않으며, 현재 상태는 `public_launch_ready=false` — 소유자/운영자 시험용이다. 목표는 "실제 유저가 써도 어색하지 않은 프로덕션 수준"으로 안정화·정리하는 것이다.

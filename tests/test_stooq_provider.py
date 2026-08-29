@@ -143,33 +143,45 @@ class StooqProviderTests(unittest.TestCase):
             self.assertEqual(snapshot.source, "yahoo")
             self.assertGreaterEqual(snapshot.trend_template_score, 80)
 
-    def test_yahoo_process_cache_refreshes_when_ttl_bucket_changes(self) -> None:
+    def test_process_cache_refreshes_when_ttl_bucket_changes(self) -> None:
+        """The memoised loader must let go of a cached file once its TTL bucket rolls.
+
+        This used to cover the Yahoo loader, but every caller there passes a config and
+        so never reached the memoised variant; it was testing a layer nothing ran. Stooq
+        is where that memoisation is actually live.
+        """
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            cache_dir = root / "data" / "market_cache" / "yahoo" / "v1"
+            cache_dir = root / "data" / "market_cache" / "stooq" / "v1"
             cache_dir.mkdir(parents=True)
-            providers._load_yahoo_bars_cached.cache_clear()
+            cache_path = cache_dir / "aapl.csv"
+
+            def write(volume_marker: float) -> None:
+                rows = ["Date,Open,High,Low,Close,Volume"]
+                for bar in make_trending_bars():
+                    rows.append(
+                        f"{bar.date.isoformat()},{bar.open},{bar.high},{bar.low},{bar.close},{volume_marker}"
+                    )
+                cache_path.write_text(chr(10).join(rows), encoding="utf-8")
+
+            providers._load_stooq_bars_cached.cache_clear()
             original_bucket = providers._ttl_bucket
             buckets = iter([1, 1, 2])
-            bars = make_trending_bars()
-            cache_path = cache_dir / "aapl.json"
-            cache_path.write_text(json.dumps(yahoo_payload("AAPL", "Apple v1", bars)), encoding="utf-8")
-
+            write(1000.0)
             try:
                 providers._ttl_bucket = lambda _cache_ttl_hours: next(buckets)  # type: ignore[assignment]
-                first_bars, first_name = providers._load_yahoo_bars(str(root / "data"), "AAPL", 1.0, 12.0)
-                cache_path.write_text(json.dumps(yahoo_payload("AAPL", "Apple v2", bars)), encoding="utf-8")
-                second_bars, second_name = providers._load_yahoo_bars(str(root / "data"), "AAPL", 1.0, 12.0)
-                third_bars, third_name = providers._load_yahoo_bars(str(root / "data"), "AAPL", 1.0, 12.0)
+                first = providers._load_stooq_bars(str(root / "data"), "AAPL", 1.0, 12.0, "")
+                write(2000.0)
+                second = providers._load_stooq_bars(str(root / "data"), "AAPL", 1.0, 12.0, "")
+                third = providers._load_stooq_bars(str(root / "data"), "AAPL", 1.0, 12.0, "")
             finally:
                 providers._ttl_bucket = original_bucket  # type: ignore[assignment]
-                providers._load_yahoo_bars_cached.cache_clear()
+                providers._load_stooq_bars_cached.cache_clear()
 
-            self.assertEqual(first_name, "Apple v1")
-            self.assertEqual(second_name, "Apple v1")
-            self.assertEqual(third_name, "Apple v2")
-            self.assertEqual(len(first_bars), len(second_bars))
-            self.assertEqual(len(second_bars), len(third_bars))
+            # Same bucket serves the memoised result; a new bucket re-reads the file.
+            self.assertEqual(first[-1].volume, 1000.0)
+            self.assertEqual(second[-1].volume, 1000.0)
+            self.assertEqual(third[-1].volume, 2000.0)
 
     def test_yahoo_provider_applies_manual_enrichment_for_entry_quality(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
