@@ -924,3 +924,70 @@ class OperatorViewTests(unittest.TestCase):
                 with self.subTest(path=path):
                     result = handle_api(config, "GET", path, "", None, {})
                     self.assertTrue(result.ok)
+
+
+class AuditCoverageTests(unittest.TestCase):
+    """The audit trail recorded only user.export and user.delete.
+
+    Everything an operator would actually want to trace - who added tickers, who spent
+    provider budget by queueing a scan, where a tenant's users came from - was absent, so
+    the operator view was empty on a live system and looked broken rather than quiet.
+    """
+
+    def _register(self, config: AppConfig) -> str:
+        registered = handle_api(
+            config, "POST", "/api/auth/register", "",
+            {"email": "owner@example.com", "password": "correct-horse-battery", "tenant_name": "Owner"},
+        )
+        return str(registered.data["session_token"])
+
+    def test_registration_watchlist_and_scan_are_recorded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = AppConfig(**{**make_config(Path(tmp)).__dict__, "scan_queue_enabled": True})
+            with connect(config) as conn:
+                init_db(conn)
+            token = self._register(config)
+            auth = {"authorization": f"Bearer {token}"}
+
+            handle_api(config, "POST", "/api/user/watchlist", "", {"tickers": "PLTR VST"}, auth)
+            handle_api(config, "DELETE", "/api/user/watchlist", "ticker=VST", None, auth)
+            queued = handle_api(config, "POST", "/api/jobs/scan", "", {}, auth)
+
+            events = handle_api(config, "GET", "/api/admin/audit-events", "", None, auth).data["items"]
+            actions = [event["action"] for event in events]
+            for expected in ("user.register", "watchlist.add", "watchlist.remove", "scan.queue"):
+                self.assertIn(expected, actions)
+
+            scan_event = next(event for event in events if event["action"] == "scan.queue")
+            self.assertEqual(scan_event["target_id"], queued.data["id"])
+
+            added = next(event for event in events if event["action"] == "watchlist.add")
+            self.assertEqual(added["metadata"]["added"], ["PLTR", "VST"])
+            removed = next(event for event in events if event["action"] == "watchlist.remove")
+            self.assertEqual(removed["metadata"]["removed"], ["VST"])
+
+    def test_a_market_universe_scan_records_the_real_job_id(self) -> None:
+        """The branch where the id was read from a key the payload does not have.
+
+        enqueue_or_get_market_scan_snapshot returns the job under "job"; the audit call
+        first read "job_id", which is absent, so it stored an empty string and every
+        assertion short of comparing against the queue still passed.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            config = AppConfig(**{
+                **make_config(Path(tmp)).__dict__,
+                "scan_queue_enabled": True,
+                "scan_mode": "market_universe",
+            })
+            with connect(config) as conn:
+                init_db(conn)
+            token = self._register(config)
+            auth = {"authorization": f"Bearer {token}"}
+
+            queued = handle_api(config, "POST", "/api/jobs/scan", "", {}, auth)
+            self.assertEqual(queued.status_code, 202)
+
+            events = handle_api(config, "GET", "/api/admin/audit-events", "", None, auth).data["items"]
+            scan_event = next(event for event in events if event["action"] == "scan.queue")
+            self.assertTrue(scan_event["target_id"], "scan.queue recorded an empty job id")
+            self.assertTrue(scan_event["target_id"].startswith("market_"))

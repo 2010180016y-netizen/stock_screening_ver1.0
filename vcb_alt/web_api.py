@@ -62,6 +62,7 @@ from .tenant_store import (
     list_tenant_users,
     list_user_watchlist,
     login_user,
+    record_audit_event,
     require_role,
     remove_user_watchlist,
     require_user,
@@ -171,6 +172,7 @@ def handle_api(
                 tenant_name=str(body.get("tenant_name") or "Default tenant"),
             )
             session = login_user(conn, email=user["email"], password=str(body.get("password", "")))
+            record_audit_event(conn, user, "user.register", "user", user["id"], {"role": user["role"]})
             return OperationResult.success("User registered.", session, status_code=201)
         if method == "POST" and path == "/api/auth/login":
             if not config.user_auth_enabled:
@@ -214,6 +216,10 @@ def handle_api(
                 tickers = raw.replace(",", " ").split() if isinstance(raw, str) else [str(item) for item in raw or []]
                 data = add_user_watchlist(conn, user, tickers)
                 data["metadata"] = _watchlist_metadata(config)
+                record_audit_event(
+                    conn, user, "watchlist.add", "watchlist", user["tenant_id"],
+                    {"added": data.get("added", []), "existing": data.get("existing", [])},
+                )
                 return OperationResult.success(
                     "User watchlist updated.",
                     data,
@@ -223,6 +229,10 @@ def handle_api(
                 ticker = parse_qs(query).get("ticker", [""])[0]
                 data = remove_user_watchlist(conn, user, ticker)
                 data["metadata"] = _watchlist_metadata(config)
+                record_audit_event(
+                    conn, user, "watchlist.remove", "watchlist", user["tenant_id"],
+                    {"removed": data.get("removed", [])},
+                )
                 return OperationResult.success("User watchlist updated.", data)
         if path == "/api/jobs/scan" and method == "POST":
             if not config.user_auth_enabled or not config.scan_queue_enabled:
@@ -230,12 +240,22 @@ def handle_api(
             user = require_user(conn, bearer_token(headers or {}))
             if config.scan_mode == "market_universe":
                 outcome = enqueue_or_get_market_scan_snapshot(config, conn, user)
+                # Only a queued scan is recorded. A "fresh" result is a read of a snapshot
+                # someone else already paid for, and auditing every dashboard load would
+                # bury the entries that show who actually consumed provider budget.
                 if outcome["state"] == "fresh":
                     return OperationResult.success("Fresh market scan snapshot loaded.", outcome["report"])
+                record_audit_event(
+                    conn, user, "scan.queue", "market_scan",
+                    str((outcome.get("job") or {}).get("id") or ""),
+                    {"state": outcome["state"]},
+                )
                 return OperationResult.success(
                     "Market scan snapshot queued.", public_market_scan_outcome(outcome), status_code=202
                 )
-            return OperationResult.success("Scan job queued.", enqueue_scan_job(conn, user), status_code=202)
+            job = enqueue_scan_job(conn, user)
+            record_audit_event(conn, user, "scan.queue", "scan_job", str(job.get("id") or ""), {})
+            return OperationResult.success("Scan job queued.", job, status_code=202)
         if path == "/api/user/scan" and method in {"GET", "POST"}:
             if not config.user_auth_enabled:
                 raise ValidationError("User authentication is not enabled.")
