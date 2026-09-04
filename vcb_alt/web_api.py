@@ -182,7 +182,13 @@ def handle_api(
             )
         if method == "GET" and path == "/api/me":
             user = require_user(conn, bearer_token(headers or {}))
-            return OperationResult.success("User loaded.", public_user(user))
+            # The dashboard needs this to decide whether to ask for the operator-only
+            # views at all. Without it every ordinary user's page load fired a request
+            # that could only ever return 401. Telling a user their own privilege level
+            # discloses nothing they could not learn by trying.
+            payload = public_user(user)
+            payload["is_global_operator"] = is_global_operator(config, user)
+            return OperationResult.success("User loaded.", payload)
         if method == "GET" and path == "/api/user/export":
             user = require_user(conn, bearer_token(headers or {}))
             return OperationResult.success("User data exported.", export_user_data(conn, user))

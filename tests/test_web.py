@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 import unittest
 from io import BytesIO
@@ -594,3 +595,25 @@ class BuildIdentityTests(unittest.TestCase):
             result = handle_api(config, "GET", "/api/version", "", None, {})
         self.assertTrue(result.ok)
         self.assertEqual(sorted(result.data.keys()), ["commit", "commit_source", "version"])
+
+
+class TranslationParityTests(unittest.TestCase):
+    """Every dashboard string must exist in both languages.
+
+    The app translates by key lookup, so a key present in one language and missing from
+    the other does not fail loudly - the toggle just renders the key name, or nothing, on
+    whichever side is short. That is invisible until someone switches language.
+    """
+
+    KEY = re.compile(r"^\s{4}([a-z_0-9]+):", re.M)
+
+    def _blocks(self, served: str) -> tuple[set[str], set[str]]:
+        english = served.split("en: {", 1)[1].split("\n  },", 1)[0]
+        korean = served.split("ko: {", 1)[1].split("\n  },", 1)[0]
+        return set(self.KEY.findall(english)), set(self.KEY.findall(korean))
+
+    def test_dashboard_translations_match(self) -> None:
+        english, korean = self._blocks(_served("app.js"))
+        self.assertGreater(len(english), 50, "the English block did not parse")
+        self.assertEqual(english - korean, set(), "keys missing a Korean translation")
+        self.assertEqual(korean - english, set(), "keys missing an English translation")

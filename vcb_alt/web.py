@@ -98,6 +98,11 @@ def _web_asset(name: str) -> str:
     These files are the only source of the UI. They ship with the package
     (see package-data in pyproject.toml), so a missing one means a broken install
     rather than a condition worth silently papering over.
+
+    Assets are read once per process. That is right for serving - a warm serverless
+    instance should not stat a file per request - but it means an edit to app.js or
+    app.css is invisible until the server restarts. A browser hard-reload will not help;
+    the stale copy is on the server side.
     """
     if name in _WEB_ASSET_CACHE:
         return _WEB_ASSET_CACHE[name]

@@ -113,6 +113,20 @@ const I18N = {
     provider: 'Provider',
     data_as_of: 'Data as of',
     ops_success: 'Operational status: success',
+    operator_tools: 'Operator',
+    operator_help: 'Tenant-scoped. Loads when you open it.',
+    queue_status: 'Scan queue',
+    tenant_users: 'Users in this workspace',
+    provider_alerts: 'Provider alerts',
+    audit_events: 'Recent activity',
+    operator_loading: 'Loading.',
+    operator_unavailable: 'Not available to this account.',
+    operator_empty: 'Nothing recorded yet.',
+    queue_oldest_wait: 'oldest queued',
+    queue_state_queued: 'queued',
+    queue_state_running: 'running',
+    queue_state_completed: 'completed',
+    queue_state_failed: 'failed',
     ops_provider_issues: 'Operational status: {count} provider issue(s)'
   },
   ko: {
@@ -216,6 +230,20 @@ const I18N = {
     provider: '제공자',
     data_as_of: '데이터 기준',
     ops_success: '운영 상태: 정상',
+    operator_tools: '운영자 도구',
+    operator_help: '이 워크스페이스 범위입니다. 펼칠 때 불러옵니다.',
+    queue_status: '스캔 대기열',
+    tenant_users: '이 워크스페이스 사용자',
+    provider_alerts: '데이터 제공자 경고',
+    audit_events: '최근 활동',
+    operator_loading: '불러오는 중입니다.',
+    operator_unavailable: '이 계정에는 표시할 수 없습니다.',
+    operator_empty: '기록된 내용이 없습니다.',
+    queue_oldest_wait: '가장 오래 대기 중',
+    queue_state_queued: '대기 중',
+    queue_state_running: '실행 중',
+    queue_state_completed: '완료',
+    queue_state_failed: '실패',
     ops_provider_issues: '운영 상태: 제공자 이슈 {count}건'
   }
 };
@@ -736,11 +764,14 @@ async function runAlpacaDiagnostics() {
 }
 
 async function loadOps() {
+  // Operator-only in SaaS mode. Asking anyway would put a guaranteed 401 in every
+  // ordinary user's console on every page load, so ask only when it can succeed. The
+  // catch stays as the backstop for a session whose privileges changed under us.
+  const mayReadFailures = !(state.config && state.config.user_auth_enabled)
+    || Boolean(state.sessionUser && state.sessionUser.is_global_operator);
   const [readiness, failuresOrNull, health] = await Promise.all([
     api('/api/saas-readiness'),
-    // Operator-only in SaaS mode. A normal signed-in user gets 401 here, which must not
-    // take the rest of the operations panel down with it.
-    api('/api/failures').catch(() => null),
+    mayReadFailures ? api('/api/failures').catch(() => null) : Promise.resolve(null),
     api('/api/provider-health').catch(() => null)
   ]);
   const failures = failuresOrNull || { items: [], count: 0, restricted: true };
@@ -1042,6 +1073,8 @@ async function refreshAll() {
     await ensureUserSession();
     await ensureStarterWatchlist();
     await Promise.all([loadWatchlist(), loadOps()]);
+    showOperatorPanelIfPermitted();
+    await loadOperatorPanel();
   } catch (error) {
     showNotice(error.message, true);
   } finally {
@@ -1051,6 +1084,70 @@ async function refreshAll() {
 
 async function bootstrap() {
   await refreshAll();
+}
+
+// The four /api/admin/* endpoints have existed for some time with nothing calling them:
+// the operator could only reach their own queue depth, users, alerts and audit trail with
+// curl. This panel is the missing half. It is collapsed and loads on open, so an ordinary
+// user costs no extra requests, and every fetch degrades on its own - one endpoint being
+// unavailable must not blank the other three.
+function showOperatorPanelIfPermitted() {
+  const panel = document.getElementById('operator-panel');
+  const role = (state.sessionUser && state.sessionUser.role) || '';
+  panel.hidden = !(state.config && state.config.user_auth_enabled && ['owner', 'admin'].includes(role));
+}
+
+function renderOperatorList(id, rows, render) {
+  const target = document.getElementById(id);
+  if (rows === null || rows === undefined) {
+    target.innerHTML = `<div class="empty-state">${escapeHtml(t('operator_unavailable'))}</div>`;
+    return;
+  }
+  target.innerHTML = rows.length
+    ? rows.map(render).join('')
+    : `<div class="empty-state">${escapeHtml(t('operator_empty'))}</div>`;
+}
+
+async function loadOperatorPanel() {
+  const panel = document.getElementById('operator-panel');
+  if (!panel.open || panel.dataset.loading === '1') return;
+  panel.dataset.loading = '1';
+  for (const id of ['operator-queue', 'operator-users', 'operator-alerts', 'operator-audit']) {
+    document.getElementById(id).innerHTML = `<div class="empty-state">${escapeHtml(t('operator_loading'))}</div>`;
+  }
+  try {
+    const [queue, users, alerts, audit] = await Promise.all([
+      api('/api/admin/queue-status').catch(() => null),
+      api('/api/admin/users').catch(() => null),
+      api('/api/admin/provider-alerts').catch(() => null),
+      api('/api/admin/audit-events').catch(() => null)
+    ]);
+
+    const queueTarget = document.getElementById('operator-queue');
+    if (queue === null) {
+      queueTarget.innerHTML = `<div class="empty-state">${escapeHtml(t('operator_unavailable'))}</div>`;
+    } else {
+      // Always show all four states. status_counts only carries states that have rows, so
+      // an idle queue would otherwise read as "nothing recorded" - which is a different
+      // claim from "zero queued, zero running", and the one an operator needs.
+      const states = ['queued', 'running', 'completed', 'failed'];
+      const oldest = queue.oldest_queued_at
+        ? `<div>${escapeHtml(t('queue_oldest_wait'))}: ${escapeHtml(queue.oldest_queued_at)}</div>`
+        : '';
+      queueTarget.innerHTML = states
+        .map((name) => `<div>${escapeHtml(t(`queue_state_${name}`))}: ${escapeHtml(String(queue[name] ?? 0))}</div>`)
+        .join('') + oldest;
+    }
+
+    renderOperatorList('operator-users', users && users.items,
+      (row) => `<div>${escapeHtml(row.email)} - ${escapeHtml(row.role)}</div>`);
+    renderOperatorList('operator-alerts', alerts && alerts.items,
+      (row) => `<div>${escapeHtml(row.created_at)}: ${escapeHtml(row.provider)} ${escapeHtml(row.code || '')}</div>`);
+    renderOperatorList('operator-audit', audit && audit.items,
+      (row) => `<div>${escapeHtml(row.created_at)}: ${escapeHtml(row.action)}</div>`);
+  } finally {
+    panel.dataset.loading = '';
+  }
 }
 
 // After a scan the user should be able to tell how much of their universe was actually
@@ -1188,5 +1285,6 @@ document.getElementById('scan-button').addEventListener('click', runScan);
 document.getElementById('select-button').addEventListener('click', runSelection);
 document.getElementById('refresh-button').addEventListener('click', bootstrap);
 document.getElementById('alpaca-diagnostics-button').addEventListener('click', runAlpacaDiagnostics);
+document.getElementById('operator-panel').addEventListener('toggle', () => { loadOperatorPanel().catch(() => {}); });
 initLanguageToggle();
 bootstrap();

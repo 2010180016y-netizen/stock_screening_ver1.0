@@ -438,6 +438,16 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; }
 .readiness { border-bottom: 1px solid var(--line); font-size: 13px; color: var(--muted); }
 .ops-list { font-size: 13px; color: var(--muted); }
 .provider-block { padding: 12px 14px; border-bottom: 1px solid var(--line); display: grid; gap: 10px; }
+#operator-panel > summary {
+  cursor: pointer;
+  padding: 12px 14px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--line);
+}
+.operator-block { padding: 12px 14px; border-bottom: 1px solid var(--line); display: grid; gap: 6px; }
+.operator-block:last-child { border-bottom: none; }
+.operator-block h3 { margin: 0; font-size: 13px; color: var(--muted); font-weight: 600; }
+.operator-block .ops-list > div { overflow-wrap: anywhere; }
 .provider-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
 .provider-head h3 { margin: 0; font-size: 13px; letter-spacing: 0.02em; }
 .provider-list { display: grid; gap: 6px; font-size: 13px; }

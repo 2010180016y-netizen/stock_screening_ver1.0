@@ -118,6 +118,29 @@
 
           <div id="failures" class="ops-list"></div>
         </section>
+
+        <details id="operator-panel" class="panel" hidden>
+          <summary data-i18n="operator_tools">Operator</summary>
+          <p class="empty-state" data-i18n="operator_help">
+            Tenant-scoped. Loads when you open it.
+          </p>
+          <div class="operator-block">
+            <h3 data-i18n="queue_status">Scan queue</h3>
+            <div id="operator-queue" class="ops-list"></div>
+          </div>
+          <div class="operator-block">
+            <h3 data-i18n="tenant_users">Users in this workspace</h3>
+            <div id="operator-users" class="ops-list"></div>
+          </div>
+          <div class="operator-block">
+            <h3 data-i18n="provider_alerts">Provider alerts</h3>
+            <div id="operator-alerts" class="ops-list"></div>
+          </div>
+          <div class="operator-block">
+            <h3 data-i18n="audit_events">Recent activity</h3>
+            <div id="operator-audit" class="ops-list"></div>
+          </div>
+        </details>
       </aside>
 
       <section class="decision-area">

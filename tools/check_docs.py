@@ -38,7 +38,6 @@ DESIGN_DOCS = {
 # Settings named by forward-looking plans that nothing reads yet. Each entry is a promise
 # that the plan still describes future work; delete it when the setting is implemented.
 PLANNED_SETTINGS = {
-    "ALERT_WEBHOOK_URL",  # MONITORING_ALERTING_PLAN.md
     "AUTH_PROVIDER",  # AUTH_MFA_RBAC_PLAN.md
 }
 
