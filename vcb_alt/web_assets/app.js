@@ -736,19 +736,32 @@ async function runAlpacaDiagnostics() {
 }
 
 async function loadOps() {
-  const [readiness, failures, health] = await Promise.all([
+  const [readiness, failuresOrNull, health] = await Promise.all([
     api('/api/saas-readiness'),
-    api('/api/failures'),
+    // Operator-only in SaaS mode. A normal signed-in user gets 401 here, which must not
+    // take the rest of the operations panel down with it.
+    api('/api/failures').catch(() => null),
     api('/api/provider-health').catch(() => null)
   ]);
+  const failures = failuresOrNull || { items: [], count: 0, restricted: true };
   if (health) renderProviderHealth(health);
   state.failures = failures.items || [];
-  document.getElementById('failure-count').textContent = `${failures.count} ${t('failures')}`;
+  document.getElementById('failure-count').textContent = failures.restricted
+    ? (state.lang === 'ko' ? '운영자 전용' : 'operator only')
+    : `${failures.count} ${t('failures')}`;
   const opsState = document.getElementById('ops-state');
-  opsState.className = `status-dot ${failures.count ? 'warn' : 'good'}`;
-  opsState.textContent = failures.count
-    ? (state.lang === 'ko' ? '운영 상태: 실패 감지' : 'Operational status: failures detected')
-    : t('ops_success');
+  if (failures.restricted) {
+    // Do not claim "all clear" for a panel this account cannot actually see.
+    opsState.className = 'status-dot';
+    opsState.textContent = state.lang === 'ko'
+      ? '운영 상태: 조회 권한 없음'
+      : 'Operational status: not visible to this account';
+  } else {
+    opsState.className = `status-dot ${failures.count ? 'warn' : 'good'}`;
+    opsState.textContent = failures.count
+      ? (state.lang === 'ko' ? '운영 상태: 실패 감지' : 'Operational status: failures detected')
+      : t('ops_success');
+  }
   document.getElementById('readiness').innerHTML = `
     <strong>${escapeHtml(translateReadinessDecision(readiness.decision))}</strong><br>
     ${state.lang === 'ko'
@@ -757,9 +770,15 @@ async function loadOps() {
         + 'durable operations, load testing, and legal review.'}
   `;
   const target = document.getElementById('failures');
-  target.innerHTML = failures.items.length
-    ? failures.items.map((item) => `<div>${escapeHtml(item.created_at)}: ${escapeHtml(item.message)}</div>`).join('')
-    : `<div>${state.lang === 'ko' ? '최근 실패가 없습니다.' : 'No recent failures.'}</div>`;
+  if (failures.restricted) {
+    target.innerHTML = `<div>${state.lang === 'ko'
+      ? '운영자 계정만 실패 기록을 볼 수 있습니다.'
+      : 'Failure records are visible to operator accounts only.'}</div>`;
+  } else {
+    target.innerHTML = failures.items.length
+      ? failures.items.map((item) => `<div>${escapeHtml(item.created_at)}: ${escapeHtml(item.message)}</div>`).join('')
+      : `<div>${state.lang === 'ko' ? '최근 실패가 없습니다.' : 'No recent failures.'}</div>`;
+  }
 }
 
 async function addTickers(event) {

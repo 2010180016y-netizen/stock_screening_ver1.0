@@ -30,7 +30,7 @@ from .db import (
     remove_watchlist,
     save_evaluation,
 )
-from .errors import AppError, ValidationError
+from .errors import AppError, UnauthorizedError, ValidationError
 from .job_queue import (
     enqueue_or_get_market_scan_snapshot,
     enqueue_scan_job,
@@ -73,6 +73,26 @@ from .web_auth import (
     require_worker_token,
 )
 from .validation import validate_ticker
+
+
+def _require_operator_view(config: AppConfig, conn: Any, headers: dict[str, str] | None) -> None:
+    """Guard the cross-tenant operator views: /api/logs and /api/failures.
+
+    These are not tenant data - the worker records its own failure messages there - and
+    they are not in LEGACY_GLOBAL_API_PATHS, so SaaS mode left them reachable by anyone.
+    The shared deployment token does not cover them either: production runs with
+    public_web_enabled=false, which switches that gate off entirely, so on a deployed
+    site the only thing in front of them was nothing at all.
+
+    Single-operator local mode is unchanged: there the server is the operator's own
+    machine and the dashboard reads these directly.
+    """
+    if not config.user_auth_enabled:
+        return
+    user = require_user(conn, bearer_token(headers or {}))
+    if not is_global_operator(config, user):
+        raise UnauthorizedError("Operator logs require a global operator account.")
+
 
 LEGACY_GLOBAL_API_PATHS = {
     "/api/watchlist": "/api/user/watchlist",
@@ -315,9 +335,11 @@ def handle_api(
                 {"selection": selection.to_dict(), "failures": failures, "elapsed_ms": elapsed_ms},
             )
         if method == "GET" and path == "/api/logs":
+            _require_operator_view(config, conn, headers)
             items = recent_logs(conn, 12)
             return OperationResult.success("Logs loaded.", {"items": items, "count": len(items)})
         if method == "GET" and path == "/api/failures":
+            _require_operator_view(config, conn, headers)
             items = recent_failures(conn, 12)
             return OperationResult.success("Failures loaded.", {"items": items, "count": len(items)})
     raise ValidationError("API route not found.")

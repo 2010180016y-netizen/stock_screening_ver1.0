@@ -865,3 +865,62 @@ class _FakeRateLimitHandler:
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OperatorViewTests(unittest.TestCase):
+    """/api/logs and /api/failures are cross-tenant operator views.
+
+    They are not in LEGACY_GLOBAL_API_PATHS, so SaaS mode let anyone read them, and the
+    shared deployment token is no help: production runs public_web_enabled=false, which
+    turns that gate off completely. A deployed site served the worker's own failure
+    messages to unauthenticated callers.
+    """
+
+    def test_saas_mode_refuses_anonymous_and_ordinary_users(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = make_config(Path(tmp))
+            with connect(config) as conn:
+                init_db(conn)
+                init_saas_db(conn)
+                session = create_user(conn, email="member@example.com", password="correct-horse-battery")
+                login = login_user(conn, email="member@example.com", password="correct-horse-battery")
+            token = login["session_token"]
+            self.assertTrue(session)
+
+            for path in ("/api/logs", "/api/failures"):
+                with self.subTest(path=path, caller="anonymous"):
+                    with self.assertRaises(UnauthorizedError):
+                        handle_api(config, "GET", path, "", None, {})
+                with self.subTest(path=path, caller="signed-in non-operator"):
+                    with self.assertRaises(UnauthorizedError):
+                        handle_api(config, "GET", path, "", None, {"authorization": f"Bearer {token}"})
+
+    def test_a_global_operator_can_still_read_them(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = make_config(root)
+            config = AppConfig(**{**config.__dict__, "global_operator_emails": ("boss@example.com",)})
+            with connect(config) as conn:
+                init_db(conn)
+                init_saas_db(conn)
+                create_user(conn, email="boss@example.com", password="correct-horse-battery")
+                login = login_user(conn, email="boss@example.com", password="correct-horse-battery")
+            headers = {"authorization": f"Bearer {login['session_token']}"}
+
+            for path in ("/api/logs", "/api/failures"):
+                with self.subTest(path=path):
+                    result = handle_api(config, "GET", path, "", None, headers)
+                    self.assertTrue(result.ok)
+
+    def test_single_operator_local_mode_is_unchanged(self) -> None:
+        """Without user auth the server is the operator's own machine."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = AppConfig(**{**make_config(root).__dict__, "user_auth_enabled": False})
+            with connect(config) as conn:
+                init_db(conn)
+
+            for path in ("/api/logs", "/api/failures"):
+                with self.subTest(path=path):
+                    result = handle_api(config, "GET", path, "", None, {})
+                    self.assertTrue(result.ok)
