@@ -495,6 +495,8 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; }
   font-weight: 600;
 }
 .sample-banner[hidden] { display: none; }
+#pipeline-banner ul { margin: 6px 0 0; padding-left: 18px; font-weight: 400; }
+#pipeline-banner li { margin-bottom: 4px; }
 .blocked-state { text-align: left; display: grid; gap: 12px; padding: 6px 0 2px; }
 .blocked-lead { margin: 0; color: var(--ink); }
 .blocked-reason { border-left: 3px solid var(--warn); padding-left: 11px; }

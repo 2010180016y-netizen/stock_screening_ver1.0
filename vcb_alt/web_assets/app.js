@@ -127,6 +127,10 @@ const I18N = {
     queue_state_running: 'running',
     queue_state_completed: 'completed',
     queue_state_failed: 'failed',
+    pipeline_not_ready: 'This setup cannot reach a selection yet. A scan will run and score, but nothing will be selected until:',
+    pipeline_universe: 'No real universe. Add tickers to your scan list, supply universe.csv, or configure Alpaca. Sample data is demo output and is never a recommendation.',
+    pipeline_prefilter: 'No prefilter provider. Set VCB_ALT_MARKET_PREFILTER_PROVIDER=yahoo with VCB_ALT_EXTERNAL_API_ENABLED=true, or configure Alpaca.',
+    pipeline_enrichment: 'No research enrichment. Price and volume alone reach about 35/100 data coverage and 60 is required, so nothing can be selected. Set VCB_ALT_RESEARCH_DATA_PROVIDER=finnhub with a key, or supply enrichment.csv.',
     ops_provider_issues: 'Operational status: {count} provider issue(s)'
   },
   ko: {
@@ -244,6 +248,10 @@ const I18N = {
     queue_state_running: '실행 중',
     queue_state_completed: '완료',
     queue_state_failed: '실패',
+    pipeline_not_ready: '현재 설정으로는 종목이 선정되지 않습니다. 스캔과 점수 계산은 되지만, 다음이 해결되어야 선정이 가능합니다:',
+    pipeline_universe: '스캔 대상이 없습니다. 사이드바 스캔 목록에 종목을 추가하거나, universe.csv를 두거나, Alpaca를 설정하세요. 샘플 데이터는 데모 출력이며 추천이 아닙니다.',
+    pipeline_prefilter: '프리필터 제공자가 없습니다. VCB_ALT_MARKET_PREFILTER_PROVIDER=yahoo 와 VCB_ALT_EXTERNAL_API_ENABLED=true 를 설정하거나 Alpaca를 구성하세요.',
+    pipeline_enrichment: '리서치 보강 데이터가 없습니다. 가격과 거래량만으로는 데이터 커버리지가 약 35/100 이고 60 이상이어야 선정됩니다. VCB_ALT_RESEARCH_DATA_PROVIDER=finnhub 와 키를 설정하거나 enrichment.csv 를 두세요.',
     ops_provider_issues: '운영 상태: 제공자 이슈 {count}건'
   }
 };
@@ -633,6 +641,7 @@ async function loadConfig() {
   ]);
   state.config = config;
   state.providerStatus = providerStatus;
+  updatePipelineBanner(config);
   const mode = providerStatus.capabilities?.mode || providerStatus.scan_mode || 'unknown';
   document.getElementById('provider').textContent = isKo()
     ? `${translateSource(providerStatus.provider)} 데이터`
@@ -990,6 +999,42 @@ async function runSelection() {
 // Sample data renders in exactly the same frame as live results - same cards, same
 // allocation percentages - so on a default install the dashboard can look like it is
 // recommending real positions. Say so unmistakably, above the results.
+// /api/config carries a scan_pipeline diagnosis - can this setup actually reach a
+// selection, and if not, which stage is missing - and nothing displayed it. Without it the
+// only way to learn that enrichment is unconfigured is to run a scan, wait, and read
+// "0 selected" with a coverage number next to every candidate. The answer is known before
+// the scan starts, so say it before the scan starts.
+function updatePipelineBanner(config = {}) {
+  const banner = document.getElementById('pipeline-banner');
+  if (!banner) return;
+  const pipeline = config.scan_pipeline;
+  // An older deployment has no scan_pipeline at all; say nothing rather than guess.
+  if (!pipeline || pipeline.ready_for_selection !== false) {
+    banner.hidden = true;
+    banner.innerHTML = '';
+    return;
+  }
+  // Build the lines from the structured stage flags rather than the server's prose. The
+  // blockers array is English only, so a Korean reader got a translated heading above an
+  // untranslated instruction - the half that actually tells them what to do. The server
+  // text stays as the fallback for a shape this build does not recognise.
+  const stages = [
+    ['universe', 'pipeline_universe'],
+    ['prefilter', 'pipeline_prefilter'],
+    ['enrichment', 'pipeline_enrichment']
+  ];
+  let lines = stages
+    .filter(([stage]) => pipeline[stage] && pipeline[stage].ready === false)
+    .map(([, key]) => t(key));
+  if (!lines.length) {
+    lines = Array.isArray(pipeline.blockers) ? pipeline.blockers : [];
+  }
+  banner.innerHTML = `${escapeHtml(t('pipeline_not_ready'))}<ul>`
+    + lines.map((line) => `<li>${escapeHtml(line)}</li>`).join('')
+    + '</ul>';
+  banner.hidden = lines.length === 0;
+}
+
 function updateSampleDataBanner(data = {}) {
   const banner = document.getElementById('sample-banner');
   if (!banner) return;
