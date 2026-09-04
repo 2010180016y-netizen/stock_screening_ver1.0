@@ -69,6 +69,36 @@ Why this reaches a selection, measured rather than assumed:
 This matches what production already recorded before the credential broke: a PLTR
 analysis returned `yahoo+finnhub` with data coverage `100/100`.
 
+### The whole path was verified against the real network (2026-09-02)
+
+Stub tests passing is not the same as the path working - that mistake was already made
+once on this exact feature. So the preset above was run with real Yahoo requests, with
+`VCB_ALT_MARKET_SCAN_REQUIRES_LIVE_DATA=true`, and with no Alpaca or Finnhub key at all:
+
+```
+OK [200] Market-universe scan completed.
+Selected: 0/3
+- NVDA: Data coverage 35/100 is below the 60 required for selection; add research enrichment.
+```
+
+The scan completes and reports per-symbol reasons. Nothing is selected, which is correct
+without enrichment. Before the fail-closed gate stopped requiring an `alpaca:` source, the
+same run was discarded entirely with "not backed by Alpaca stock snapshots".
+
+### How long a scan takes
+
+One request per symbol, so wall-clock is set by how many run at once
+(`VCB_ALT_PROVIDER_FETCH_WORKERS`). Measured on 15 real symbols:
+
+| Workers | 15 symbols | Implied per symbol | 150 symbols |
+| --- | --- | --- | --- |
+| 1 | 20.4s | 1.36s | about 200s |
+| 8 (default) | 5.8s | 0.32s | about 50s |
+
+The practical effect is how much of the universe gets ranked before
+`VCB_ALT_PREFILTER_TIME_BUDGET_SECONDS` stops the run: roughly 15 symbols serially versus
+60 at the default width, in the same 20 seconds.
+
 ### What you give up without Alpaca
 
 - **Whole-market discovery.** Yahoo answers one symbol per request, so the universe has
