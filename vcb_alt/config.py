@@ -24,6 +24,14 @@ def _is_revoked_secret(value: str) -> bool:
     return hashlib.sha256(value.encode("utf-8")).hexdigest() in REVOKED_SECRET_HASHES
 
 
+# Ceiling on concurrent provider requests. The scan is network-bound, so concurrency is
+# what makes it fast, but the market data endpoints are free and unauthenticated: past a
+# certain width this stops being a speed-up and becomes something a provider throttles or
+# blocks. Sixteen keeps a 150-symbol sweep inside a serverless execution limit with room
+# to spare.
+MAX_PROVIDER_FETCH_WORKERS = 16
+
+
 @dataclass(frozen=True)
 class AppConfig:
     database_url: str
@@ -88,6 +96,7 @@ class AppConfig:
     market_prefilter_provider: str = "auto"
     yahoo_prefilter_max_symbols: int = 150
     prefilter_time_budget_seconds: float = 20.0
+    provider_fetch_workers: int = 8
     market_snapshot_batch_size: int = 100
     market_scan_requires_live_data: bool = False
 
@@ -284,6 +293,15 @@ def load_config(root_dir: Path | None = None) -> AppConfig:
         get("PREFILTER_TIME_BUDGET_SECONDS", "20"),
         "PREFILTER_TIME_BUDGET_SECONDS",
     )
+    provider_fetch_workers = _parse_positive_int(
+        get("PROVIDER_FETCH_WORKERS", "8"),
+        "PROVIDER_FETCH_WORKERS",
+    )
+    if provider_fetch_workers > MAX_PROVIDER_FETCH_WORKERS:
+        raise ValidationError(
+            f"PROVIDER_FETCH_WORKERS must not exceed {MAX_PROVIDER_FETCH_WORKERS}; "
+            "a higher value is a request flood against a free market data endpoint, not a speed-up."
+        )
     market_snapshot_batch_size = _parse_positive_int(
         get("MARKET_SNAPSHOT_BATCH_SIZE", "100"),
         "MARKET_SNAPSHOT_BATCH_SIZE",
@@ -366,6 +384,7 @@ def load_config(root_dir: Path | None = None) -> AppConfig:
         market_prefilter_provider=market_prefilter_provider,
         yahoo_prefilter_max_symbols=yahoo_prefilter_max_symbols,
         prefilter_time_budget_seconds=prefilter_time_budget_seconds,
+        provider_fetch_workers=provider_fetch_workers,
         market_snapshot_batch_size=market_snapshot_batch_size,
         market_scan_requires_live_data=market_scan_requires_live_data,
     )
@@ -429,6 +448,7 @@ def doctor_report(config: AppConfig) -> dict[str, Any]:
         "market_prefilter_limit": config.market_prefilter_limit,
         "market_prefilter_provider": config.market_prefilter_provider,
         "prefilter_time_budget_seconds": config.prefilter_time_budget_seconds,
+        "provider_fetch_workers": config.provider_fetch_workers,
         "market_snapshot_batch_size": config.market_snapshot_batch_size,
         "market_scan_requires_live_data": config.market_scan_requires_live_data,
         "warnings": warnings,

@@ -370,8 +370,10 @@ class PrefilterSnapshotTests(unittest.TestCase):
                 for ticker in ("AAPL", "NVDA", "KO")
             ]
 
+            # Slower than the budget even with every request in flight at once, so the
+            # budget is what stops it rather than the work simply finishing.
             def slow_history(_config: object, ticker: str, years: int = 1) -> dict[str, object]:
-                time.sleep(0.04)
+                time.sleep(0.4)
                 return _fake_history(_config, ticker, years)
 
             with patch.object(market_universe, "get_price_history", side_effect=slow_history):
@@ -381,6 +383,100 @@ class PrefilterSnapshotTests(unittest.TestCase):
             self.assertLess(meta["scanned_symbols"], len(entries))
             self.assertEqual(meta["skipped_symbols"], len(entries) - meta["scanned_symbols"])
             self.assertTrue(any("time budget" in warning for warning in meta["warnings"]))
+
+    def test_the_serial_path_still_stops_at_the_time_budget(self) -> None:
+        """VCB_ALT_PROVIDER_FETCH_WORKERS=1 keeps the original one-at-a-time behaviour."""
+        with tempfile.TemporaryDirectory() as tmp:
+            config = _prefilter_config(
+                Path(tmp),
+                data_provider="yahoo",
+                external_api_enabled=True,
+                prefilter_time_budget_seconds=0.05,
+                provider_fetch_workers=1,
+            )
+            entries = [
+                UniverseEntry(ticker=ticker, name=ticker, exchange="NASDAQ", source="csv")
+                for ticker in ("AAPL", "NVDA", "KO")
+            ]
+
+            def slow_history(_config: object, ticker: str, years: int = 1) -> dict[str, object]:
+                time.sleep(0.04)
+                return _fake_history(_config, ticker, years)
+
+            with patch.object(market_universe, "get_price_history", side_effect=slow_history):
+                _, meta = prefilter_market_candidates(config, entries)
+
+            self.assertTrue(meta["time_budget_exhausted"])
+            self.assertLess(meta["scanned_symbols"], len(entries))
+
+    def test_requests_actually_overlap(self) -> None:
+        """The scan is network-bound, so overlapping the waits is the whole optimisation.
+
+        Serially these nine symbols take at least 0.9s. Concurrently they must not.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            config = _prefilter_config(
+                Path(tmp),
+                data_provider="yahoo",
+                external_api_enabled=True,
+                prefilter_time_budget_seconds=30,
+                provider_fetch_workers=9,
+            )
+            tickers = tuple(f"SYM{index}" for index in range(9))
+            entries = [
+                UniverseEntry(ticker=ticker, name=ticker, exchange="NASDAQ", source="csv")
+                for ticker in tickers
+            ]
+
+            def slow_history(_config: object, ticker: str, years: int = 1) -> dict[str, object]:
+                time.sleep(0.1)
+                return {
+                    "ticker": ticker,
+                    "source": "yahoo",
+                    "points": [
+                        {"date": "2026-08-21", "close": 100.0, "volume": 1_000_000.0},
+                        {"date": "2026-08-22", "close": 101.0, "volume": 1_100_000.0},
+                    ],
+                }
+
+            started = time.monotonic()
+            with patch.object(market_universe, "get_price_history", side_effect=slow_history):
+                candidates, meta = prefilter_market_candidates(config, entries, limit=9)
+            elapsed = time.monotonic() - started
+
+            self.assertEqual(meta["scanned_symbols"], 9)
+            self.assertEqual(len(candidates), 9)
+            self.assertLess(elapsed, 0.5, "requests did not overlap")
+
+    def test_concurrency_does_not_change_the_result(self) -> None:
+        """A screening tool must not reorder its candidates because of thread timing."""
+        tickers = ("AAPL", "NVDA", "KO")
+        entries = [
+            UniverseEntry(ticker=ticker, name=ticker, exchange="NASDAQ", source="csv")
+            for ticker in tickers
+        ]
+        # Completion order is deliberately the reverse of submission order.
+        delays = {"AAPL": 0.06, "NVDA": 0.03, "KO": 0.0}
+
+        def staggered(_config: object, ticker: str, years: int = 1) -> dict[str, object]:
+            time.sleep(delays[ticker])
+            return _fake_history(_config, ticker, years)
+
+        outcomes = []
+        for workers in (1, 3):
+            with tempfile.TemporaryDirectory() as tmp:
+                config = _prefilter_config(
+                    Path(tmp),
+                    data_provider="yahoo",
+                    external_api_enabled=True,
+                    prefilter_time_budget_seconds=30,
+                    provider_fetch_workers=workers,
+                )
+                with patch.object(market_universe, "get_price_history", side_effect=staggered):
+                    candidates, meta = prefilter_market_candidates(config, entries, limit=3)
+                outcomes.append(([item.ticker for item in candidates], meta["scanned_symbols"]))
+
+        self.assertEqual(outcomes[0], outcomes[1])
 
 
 class OperatorCsvPathTests(unittest.TestCase):
@@ -589,3 +685,55 @@ class LiveDataGateTests(unittest.TestCase):
             self.assertEqual(data["prefilter"]["source"], "yahoo:eod")
             self.assertTrue(all(item["source"] == "yahoo" for item in data["items"]))
             self.assertTrue(market_universe.market_scan_report_has_live_data(data))
+
+
+class CandidateEnrichmentTests(unittest.TestCase):
+    """Enrichment is a network call per candidate, so it runs several at a time.
+
+    Scoring stays serial and in candidate order: it is sub-millisecond arithmetic, and the
+    scoring engine's output must not depend on thread timing.
+    """
+
+    def _candidate(self, ticker: str) -> market_universe.PrefilterCandidate:
+        return market_universe.PrefilterCandidate(
+            ticker=ticker, company_name=ticker, exchange="NASDAQ", latest_price=101.0,
+            previous_close=100.0, intraday_change_pct=1.0, intraday_volume=1_000_000.0,
+            breakout_volume_ratio=1.1, spread_bps=0.0, prefilter_score=50,
+            source="yahoo:eod", data_as_of="2026-08-22", freshness_seconds=0.0,
+        )
+
+    def test_order_follows_the_candidates_not_completion(self) -> None:
+        tickers = ("AAA", "BBB", "CCC", "DDD")
+        candidates = [self._candidate(ticker) for ticker in tickers]
+        # Finishing in reverse would reorder the results if order came from completion.
+        delays = {"AAA": 0.08, "BBB": 0.06, "CCC": 0.03, "DDD": 0.0}
+
+        def snapshot(_config: object, ticker: str) -> StockSnapshot:
+            time.sleep(delays[ticker])
+            return StockSnapshot(ticker=ticker, company_name=ticker, price=101.0, source="yahoo")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config = _prefilter_config(Path(tmp), provider_fetch_workers=4)
+            failures: list[dict[str, object]] = []
+            with patch.object(market_universe, "get_snapshot", side_effect=snapshot):
+                snapshots = market_universe._snapshots_for_candidates(config, candidates, failures)
+
+        self.assertEqual([item.ticker for item in snapshots], list(tickers))
+        self.assertEqual(failures, [])
+
+    def test_one_bad_candidate_is_reported_and_the_rest_survive(self) -> None:
+        candidates = [self._candidate(ticker) for ticker in ("AAA", "BBB", "CCC")]
+
+        def snapshot(_config: object, ticker: str) -> StockSnapshot:
+            if ticker == "BBB":
+                raise NotFoundError("no snapshot for BBB")
+            return StockSnapshot(ticker=ticker, company_name=ticker, price=101.0, source="yahoo")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config = _prefilter_config(Path(tmp), provider_fetch_workers=3)
+            failures: list[dict[str, object]] = []
+            with patch.object(market_universe, "get_snapshot", side_effect=snapshot):
+                snapshots = market_universe._snapshots_for_candidates(config, candidates, failures)
+
+        self.assertEqual([item.ticker for item in snapshots], ["AAA", "CCC"])
+        self.assertEqual([item["ticker"] for item in failures], ["BBB"])

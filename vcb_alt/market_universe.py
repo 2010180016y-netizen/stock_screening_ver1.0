@@ -5,6 +5,8 @@ import hashlib
 import json
 import math
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -438,25 +440,9 @@ def _yahoo_prefilter_candidates(
     # Config already rejects a non-positive budget, so honour the value as configured.
     budget_seconds = float(config.prefilter_time_budget_seconds)
     started = time.monotonic()
-    budget_exhausted = False
-    candidates: list[PrefilterCandidate] = []
-    failures: list[dict[str, Any]] = []
-    scanned: list[UniverseEntry] = []
-    for entry in eligible:
-        if time.monotonic() - started >= budget_seconds:
-            budget_exhausted = True
-            break
-        scanned.append(entry)
-        try:
-            history = get_price_history(config, entry.ticker, years=1)
-        except AppError as exc:
-            failures.append({"ticker": entry.ticker, "code": exc.code, "message": exc.message})
-            if config.market_scan_requires_live_data and isinstance(exc, ProviderFailure):
-                raise
-            continue
-        candidate = _candidate_from_daily_points(entry, history)
-        if candidate is not None:
-            candidates.append(candidate)
+    candidates, failures, scanned, budget_exhausted = _fetch_daily_bars(
+        config, eligible, budget_seconds=budget_seconds
+    )
 
     candidates.sort(key=_prefilter_sort_key)
     candidates = candidates[:selected_limit]
@@ -489,6 +475,111 @@ def _yahoo_prefilter_candidates(
         "failures": failures[:10],
         "warnings": warnings,
     }
+
+
+def _fetch_daily_bars(
+    config: AppConfig,
+    eligible: list[UniverseEntry],
+    *,
+    budget_seconds: float,
+) -> tuple[list[PrefilterCandidate], list[dict[str, Any]], list[UniverseEntry], bool]:
+    """Fetch one symbol's daily bars per request, several requests at a time.
+
+    This is the dominant cost of a scan and it is pure waiting: about a second per symbol,
+    almost all of it spent on a socket. Run serially, a 150-symbol universe cannot finish
+    inside the time budget, so most of the universe was never ranked at all - the scan was
+    bounded by the clock rather than by the universe.
+
+    Results are collected by submission index, not completion order, so the candidate list
+    is identical to the serial one and the scan stays deterministic.
+
+    Returns (candidates, failures, scanned, budget_exhausted).
+    """
+    workers = max(1, min(config.provider_fetch_workers, len(eligible)))
+    if workers == 1:
+        return _fetch_daily_bars_serially(config, eligible, budget_seconds=budget_seconds)
+
+    results: list[tuple[UniverseEntry, dict[str, Any] | None, AppError | None]] = []
+    budget_exhausted = False
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="vcb-prefilter") as pool:
+        futures = {
+            pool.submit(_daily_bars_for, config, entry): entry for entry in eligible
+        }
+        try:
+            for future in as_completed(futures, timeout=budget_seconds):
+                results.append(future.result())
+        except FuturesTimeoutError:
+            budget_exhausted = True
+        finally:
+            # Cancels whatever has not started. Requests already in flight are left to
+            # finish, so at most `workers` extra responses arrive after the budget.
+            for future in futures:
+                future.cancel()
+
+    order = {entry.ticker: index for index, entry in enumerate(eligible)}
+    results.sort(key=lambda item: order[item[0].ticker])
+
+    candidates: list[PrefilterCandidate] = []
+    failures: list[dict[str, Any]] = []
+    scanned: list[UniverseEntry] = []
+    for entry, history, error in results:
+        scanned.append(entry)
+        if error is not None:
+            failures.append({"ticker": entry.ticker, "code": error.code, "message": error.message})
+            # A live-data deployment must not quietly proceed on a provider outage.
+            if config.market_scan_requires_live_data and isinstance(error, ProviderFailure):
+                raise error
+            continue
+        candidate = _candidate_from_daily_points(entry, history or {})
+        if candidate is not None:
+            candidates.append(candidate)
+    return candidates, failures, scanned, budget_exhausted
+
+
+def _fetch_daily_bars_serially(
+    config: AppConfig,
+    eligible: list[UniverseEntry],
+    *,
+    budget_seconds: float,
+) -> tuple[list[PrefilterCandidate], list[dict[str, Any]], list[UniverseEntry], bool]:
+    """The one-at-a-time path, kept for VCB_ALT_PROVIDER_FETCH_WORKERS=1.
+
+    Worth keeping: it is the reference the concurrent path is checked against, and it is
+    the setting to reach for when a provider starts refusing parallel requests.
+    """
+    started = time.monotonic()
+    candidates: list[PrefilterCandidate] = []
+    failures: list[dict[str, Any]] = []
+    scanned: list[UniverseEntry] = []
+    for entry in eligible:
+        if time.monotonic() - started >= budget_seconds:
+            return candidates, failures, scanned, True
+        scanned.append(entry)
+        _, history, error = _daily_bars_for(config, entry)
+        if error is not None:
+            failures.append({"ticker": entry.ticker, "code": error.code, "message": error.message})
+            if config.market_scan_requires_live_data and isinstance(error, ProviderFailure):
+                raise error
+            continue
+        candidate = _candidate_from_daily_points(entry, history or {})
+        if candidate is not None:
+            candidates.append(candidate)
+    return candidates, failures, scanned, False
+
+
+def _daily_bars_for(
+    config: AppConfig, entry: UniverseEntry
+) -> tuple[UniverseEntry, dict[str, Any] | None, AppError | None]:
+    """One symbol's history, with the failure returned rather than raised.
+
+    Raising inside a worker thread would surface at an arbitrary point in the result
+    stream; returning the error lets the caller apply the fail-closed rule in universe
+    order, exactly as the serial path did.
+    """
+    try:
+        return entry, get_price_history(config, entry.ticker, years=1), None
+    except AppError as exc:
+        return entry, None, exc
 
 
 def _candidate_from_daily_points(entry: UniverseEntry, history: dict[str, Any]) -> PrefilterCandidate | None:
@@ -580,15 +671,47 @@ def _evaluate_prefiltered_candidates(
     candidates: list[PrefilterCandidate],
     failures: list[dict[str, Any]],
 ) -> list[EvaluationResult]:
-    evaluations: list[EvaluationResult] = []
-    for candidate in candidates:
+    """Fetch each candidate's data, then score.
+
+    The two halves are deliberately separate. Fetching is network-bound - a snapshot plus
+    Finnhub enrichment per candidate - so it runs several at a time. Scoring is pure
+    arithmetic costing under a millisecond, so it stays on one thread in candidate order:
+    concurrency buys nothing there and the scoring engine's behaviour must not depend on
+    thread timing.
+    """
+    prepared = _snapshots_for_candidates(config, candidates, failures)
+    return [evaluate_snapshot(snapshot) for snapshot in prepared]
+
+
+def _snapshots_for_candidates(
+    config: AppConfig,
+    candidates: list[PrefilterCandidate],
+    failures: list[dict[str, Any]],
+) -> list[StockSnapshot]:
+    """Enriched snapshots in candidate order, with per-candidate failures collected."""
+    workers = max(1, min(config.provider_fetch_workers, len(candidates) or 1))
+
+    def prepare(candidate: PrefilterCandidate) -> tuple[PrefilterCandidate, StockSnapshot | None, AppError | None]:
         try:
             snapshot = _snapshot_for_candidate(config, candidate)
-            snapshot = apply_research_enrichment(config, snapshot)
-            evaluations.append(evaluate_snapshot(snapshot))
+            return candidate, apply_research_enrichment(config, snapshot), None
         except AppError as exc:
-            failures.append({"ticker": candidate.ticker, "code": exc.code, "message": exc.message})
-    return evaluations
+            return candidate, None, exc
+
+    if workers == 1 or len(candidates) < 2:
+        results = [prepare(candidate) for candidate in candidates]
+    else:
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="vcb-enrich") as pool:
+            results = list(pool.map(prepare, candidates))
+
+    snapshots: list[StockSnapshot] = []
+    for candidate, snapshot, error in results:
+        if error is not None:
+            failures.append({"ticker": candidate.ticker, "code": error.code, "message": error.message})
+            continue
+        if snapshot is not None:
+            snapshots.append(snapshot)
+    return snapshots
 
 
 def _snapshot_for_candidate(config: AppConfig, candidate: PrefilterCandidate) -> StockSnapshot:
