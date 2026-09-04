@@ -31,10 +31,19 @@ ALPACA_TRADING_CONTEXTS = (
 ALPACA_DATA_BASE_URL = "https://data.alpaca.markets"
 UNIVERSE_CACHE_VERSION = "v2"
 LIVE_DATA_REQUIRED_MESSAGE = (
-    "Fail-closed: live Alpaca market data is required for production market-wide research candidates. "
-    "Sample/demo fallback is disabled; configure Alpaca assets and stock snapshots, or set "
-    "VCB_ALT_MARKET_SCAN_REQUIRES_LIVE_DATA=false only for local/demo mode."
+    "Fail-closed: real market data is required for production market-wide research candidates. "
+    "Sample/demo fallback is disabled; configure a market data provider (Alpaca snapshots or the "
+    "keyless Yahoo prefilter), or set VCB_ALT_MARKET_SCAN_REQUIRES_LIVE_DATA=false only for local/demo mode."
 )
+
+# Snapshot sources that carry real market prices. The fail-closed gate exists to keep demo
+# data out of research candidates, not to require one particular vendor. Requiring "alpaca:"
+# here rejected every scan run without an Alpaca key, including the keyless Yahoo prefilter
+# that produces "yahoo:eod" - real end-of-day market data.
+#
+# "manual" is deliberately absent: operator CSVs are unverified by design, so they stay
+# outside the production live-data gate.
+LIVE_SNAPSHOT_SOURCE_PREFIXES = ("alpaca:", "yahoo", "stooq")
 
 
 @dataclass(frozen=True)
@@ -202,7 +211,7 @@ def scan_market_universe(
         evaluations = _evaluate_prefiltered_candidates(config, candidates, failures)
     else:
         if config.market_scan_requires_live_data:
-            raise live_data_required_error("No usable Alpaca snapshot candidates were returned.")
+            raise live_data_required_error("The prefilter returned no usable market snapshot candidates.")
         evaluations = _evaluate_sample_universe(config, failures, limit=prefilter_limit or config.market_prefilter_limit)
         prefilter_meta["fallback"] = "sample_universe"
 
@@ -239,7 +248,7 @@ def ensure_live_market_scan_report(
     if not config.market_scan_requires_live_data:
         return
     if not market_scan_report_has_live_data(report):
-        raise live_data_required_error(f"{source} is not backed by Alpaca stock snapshots.")
+        raise live_data_required_error(f"{source} is not backed by real market snapshots.")
 
 
 def market_scan_report_has_live_data(report: MarketScanResult | dict[str, Any]) -> bool:
@@ -252,12 +261,21 @@ def market_scan_report_has_live_data(report: MarketScanResult | dict[str, Any]) 
         return False
     if str(prefilter.get("fallback") or "").lower() == "sample_universe":
         return False
-    if not str(prefilter.get("source") or "").startswith("alpaca:"):
+    if not is_live_snapshot_source(prefilter.get("source")):
         return False
     items = data.get("items")
     if not isinstance(items, list) or not items:
         return False
-    return all(isinstance(item, dict) and str(item.get("source") or "").startswith("alpaca:") for item in items)
+    return all(isinstance(item, dict) and is_live_snapshot_source(item.get("source")) for item in items)
+
+
+def is_live_snapshot_source(value: Any) -> bool:
+    """True when a snapshot source label names a real market data feed.
+
+    Anything unrecognised is rejected, so a new provider has to be added here on purpose
+    before its data can satisfy the production live-data requirement.
+    """
+    return str(value or "").lower().startswith(LIVE_SNAPSHOT_SOURCE_PREFIXES)
 
 
 def load_market_universe(

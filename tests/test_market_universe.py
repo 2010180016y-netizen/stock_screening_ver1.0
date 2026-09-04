@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from vcb_alt.config import AppConfig
 from vcb_alt.errors import NotFoundError, ValidationError
+from vcb_alt.models import StockSnapshot
 from vcb_alt import market_universe, providers
 from vcb_alt.market_universe import (
     UNIVERSE_CACHE_VERSION,
@@ -510,3 +511,81 @@ class ScanPipelineReadinessTests(unittest.TestCase):
             self.assertEqual(report["universe"]["source"], "watchlist")
             self.assertEqual(report["enrichment"]["source"], "finnhub")
             self.assertEqual(report["blockers"], [])
+
+
+class LiveDataGateTests(unittest.TestCase):
+    """The fail-closed gate must reject demo data without requiring one specific vendor.
+
+    It used to demand a source starting with "alpaca:", so a scan run entirely on real
+    Yahoo end-of-day bars was thrown away with "not backed by Alpaca stock snapshots".
+    That made VCB_ALT_MARKET_SCAN_REQUIRES_LIVE_DATA=true - the production setting -
+    unusable for anyone without an Alpaca key, which is the whole point of the keyless
+    prefilter.
+    """
+
+    def _report(self, source: str) -> dict[str, object]:
+        return {
+            "universe": {"source": "csv"},
+            "prefilter": {"source": source},
+            "items": [{"ticker": "NVDA", "source": source}],
+        }
+
+    def test_real_market_sources_pass(self) -> None:
+        for source in ("alpaca:iex", "alpaca:sip", "yahoo", "yahoo:eod", "stooq"):
+            with self.subTest(source=source):
+                self.assertTrue(market_universe.market_scan_report_has_live_data(self._report(source)))
+
+    def test_demo_and_unverified_sources_fail(self) -> None:
+        # "manual" is operator-supplied CSV: real-looking, but nothing checks it against
+        # the market, so it stays outside the production gate.
+        for source in ("sample", "manual", "none", "unavailable", "", "definitely-new-provider"):
+            with self.subTest(source=source):
+                self.assertFalse(market_universe.market_scan_report_has_live_data(self._report(source)))
+
+    def test_sample_universe_still_fails_even_with_a_live_item_source(self) -> None:
+        report = self._report("yahoo:eod")
+        report["universe"] = {"source": "sample"}
+        self.assertFalse(market_universe.market_scan_report_has_live_data(report))
+
+        fallback = self._report("yahoo:eod")
+        fallback["prefilter"] = {"source": "yahoo:eod", "fallback": "sample_universe"}
+        self.assertFalse(market_universe.market_scan_report_has_live_data(fallback))
+
+    def test_one_demo_item_among_live_ones_fails_the_whole_report(self) -> None:
+        report = self._report("yahoo:eod")
+        report["items"] = [{"ticker": "NVDA", "source": "yahoo:eod"}, {"ticker": "KO", "source": "sample"}]
+        self.assertFalse(market_universe.market_scan_report_has_live_data(report))
+
+    def test_keyless_yahoo_scan_survives_the_production_live_data_setting(self) -> None:
+        """End to end: the exact configuration a no-Alpaca deployment runs."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "data").mkdir()
+            (root / "data" / "universe.csv").write_text(
+                "ticker,name,exchange,tradable\n"
+                "AAPL,Apple Inc.,NASDAQ,true\n"
+                "NVDA,NVIDIA Corp.,NASDAQ,true\n",
+                encoding="utf-8",
+            )
+            config = _prefilter_config(
+                root,
+                data_provider="yahoo",
+                external_api_enabled=True,
+                market_universe_provider="csv",
+                market_prefilter_provider="yahoo",
+                market_scan_requires_live_data=True,
+            )
+
+            def fake_snapshot(_config: object, ticker: str) -> StockSnapshot:
+                return StockSnapshot(
+                    ticker=ticker, company_name=ticker, price=101.0, source="yahoo", data_as_of="2026-08-22"
+                )
+
+            with patch.object(market_universe, "get_price_history", side_effect=_fake_history):
+                with patch.object(market_universe, "get_snapshot", side_effect=fake_snapshot):
+                    report = scan_market_universe(config, prefilter_limit=2)
+
+            data = report.to_api_dict()
+            self.assertEqual(data["prefilter"]["source"], "yahoo:eod")
+            self.assertTrue(all(item["source"] == "yahoo" for item in data["items"]))
+            self.assertTrue(market_universe.market_scan_report_has_live_data(data))
