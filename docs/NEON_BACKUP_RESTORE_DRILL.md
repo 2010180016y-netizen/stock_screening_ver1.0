@@ -58,7 +58,7 @@ New-Item -ItemType Directory -Force data\restore-drills\20260603
 Run a redacted hosted health report:
 
 ```powershell
-C:\stable-diffusion-ui\installer_files\env\python.exe tools\ops_health_report.py --base-url $env:BASE_URL --timeout 20
+python tools\ops_health_report.py --base-url $env:BASE_URL --timeout 20
 ```
 
 Expected:
@@ -182,7 +182,7 @@ psql $env:STAGING_DATABASE_URL -v tenant_id="$env:DRILL_TENANT_ID" -v ON_ERROR_S
 Verify API health:
 
 ```powershell
-C:\stable-diffusion-ui\installer_files\env\python.exe tools\ops_health_report.py --base-url $env:STAGING_BASE_URL --timeout 20
+python tools\ops_health_report.py --base-url $env:STAGING_BASE_URL --timeout 20
 ```
 
 Pass condition:

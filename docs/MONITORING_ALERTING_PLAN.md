@@ -78,14 +78,14 @@ Security and abuse:
 ## Health Command
 
 ```powershell
-C:\stable-diffusion-ui\installer_files\env\python.exe tools\ops_health_report.py --base-url https://stockscreeningver10.vercel.app --timeout 20
+python tools\ops_health_report.py --base-url https://stockscreeningver10.vercel.app --timeout 20
 ```
 
 Optional webhook:
 
 ```powershell
 $env:VCB_ALT_ALERT_WEBHOOK_URL="https://hooks.example.invalid/..."
-C:\stable-diffusion-ui\installer_files\env\python.exe tools\ops_health_report.py --base-url https://stockscreeningver10.vercel.app --send-alert
+python tools\ops_health_report.py --base-url https://stockscreeningver10.vercel.app --send-alert
 ```
 
 ## Incident: Provider Outage Or Budget Exhaustion

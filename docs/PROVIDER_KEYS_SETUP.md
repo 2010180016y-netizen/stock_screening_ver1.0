@@ -181,7 +181,7 @@ notepad .env
 Then run:
 
 ```powershell
-C:\stable-diffusion-ui\installer_files\env\python.exe -m vcb_alt web --host 127.0.0.1 --port 8788
+python -m vcb_alt web --host 127.0.0.1 --port 8788
 ```
 
 Open:

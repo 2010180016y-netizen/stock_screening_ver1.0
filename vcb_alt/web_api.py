@@ -15,6 +15,7 @@ from urllib.parse import parse_qs
 
 from .ai_summary import build_ai_summary
 from .auth import public_user
+from .build_info import build_info
 from .config import AppConfig, doctor_report
 from .db import (
     add_watchlist,
@@ -111,6 +112,10 @@ def handle_api(
 ) -> OperationResult:
     if method == "GET" and path == "/api/health":
         return OperationResult.success("OK", {"status": "healthy"})
+    if method == "GET" and path == "/api/version":
+        # Unauthenticated on purpose: this is how an operator finds out that a deploy did
+        # not land. It carries no configuration, only a short commit id.
+        return OperationResult.success("Build info loaded.", dict(build_info()))
     if method == "GET" and path == "/api/config":
         report = doctor_report(config)
         try:

@@ -248,8 +248,13 @@ python -m vcb_alt admin delete-data --confirm DELETE_LOCAL_DATA
 python -m unittest discover -s tests -v
 python tools\typecheck.py
 python tools\lint.py
+python tools\secret_scan.py   # fails if a live-looking secret is committed
+python tools\check_docs.py    # fails if the docs and the code disagree
 python -m compileall vcb_alt tests tools api
 ```
+
+CI runs all of these on every push (`.github/workflows/ci.yml`), plus a PostgreSQL
+integration suite and a served-asset smoke check.
 
 ## Build
 
@@ -276,7 +281,7 @@ Future 1000-user SaaS mode is guarded by `VCB_ALT_PRODUCTION_SAAS_MODE=true`. Th
 Historical hosted queue-load verification:
 
 ```powershell
-C:\stable-diffusion-ui\installer_files\env\python.exe tools\host_queue_load_test.py --base-url https://stockscreeningver10.vercel.app --users 1000 --concurrency 20 --tickers PLTR,MSTR,VST --timeout 30 --poll-seconds 300 --trigger-worker --worker-limit 100 --simulate-distributed-ips --confirm-production-load
+python tools\host_queue_load_test.py --base-url https://stockscreeningver10.vercel.app --users 1000 --concurrency 20 --tickers PLTR,MSTR,VST --timeout 30 --poll-seconds 300 --trigger-worker --worker-limit 100 --simulate-distributed-ips --confirm-production-load
 ```
 
 Historical result: `1000` queued jobs, `1000` completed jobs, `0` errors on production deployment `dpl_8BAYrCsBPhRtgoGsp3zkxSrsZ5v5`. This is not current public-launch approval because the present live market-universe scan is blocked by Alpaca credential `HTTP 401`.

@@ -109,6 +109,31 @@ curl -s https://<YOUR-URL>/api/health
 **If it fails:** open the deployment's Runtime Logs in Vercel. A missing variable from
 Step 1 shows up as a startup error naming the variable.
 
+### Confirm the deploy actually landed
+
+A healthy `/api/health` only proves *a* build is running, not *this* build. On 2026-09-02
+production answered every request correctly while serving code from before twenty-two
+commits on `main` - four days of work, invisible from the outside.
+
+Run this from the repository, on the commit you meant to deploy:
+
+```bash
+python tools/check_deploy.py https://<YOUR-URL>
+```
+
+**Expected result:**
+
+```
+  commit: deployed 1a2b3c4d5e6f, local 1a2b3c4d5e6f
+  surface: 46 settings deployed, 46 in this checkout
+
+deployment matches this checkout
+```
+
+**If it fails,** it prints which commit is live and which settings the deployed build has
+never heard of. Redeploy and run it again. Do not continue through this runbook until it
+passes: every step below tests behaviour that only exists in the newer code.
+
 ---
 
 ## Step 3 — Confirm Alpaca accepts the new credentials

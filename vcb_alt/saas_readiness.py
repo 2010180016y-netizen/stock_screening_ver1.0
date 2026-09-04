@@ -88,8 +88,10 @@ READINESS_ITEMS = [
         status="partial",
         priority="P1",
         current_state=(
-            "Yahoo/Stooq EOD price/volume providers exist with local cache and timeout, "
-            "but no provider quota dashboard, circuit breaker, or CI live contract test."
+            "Yahoo/Stooq EOD price/volume providers exist with local cache and timeout. "
+            "provider_resilience.py adds retries, per-provider circuit breakers, daily call "
+            "budgets, and a provider health report. Still missing: a quota dashboard and a "
+            "CI live contract test against the real provider APIs."
         ),
         required_state="Provider adapters with caching, retries, circuit breakers, quotas, and contract tests.",
     ),
@@ -128,7 +130,8 @@ READINESS_ITEMS = [
         current_state=(
             "Local 1000-user / 30,000-evaluation simulation passed. Hosted /api/health load smoke passed after "
             "Neon cutover for 1000 requests at concurrency 25 with 0 errors. Historical queue-load tests exist, "
-            "but current scan-heavy deployed provider load must be rerun after Alpaca diagnostics return ready."
+            "but scan-heavy deployed provider load must be rerun against a deployment whose scan actually "
+            "reaches a selection - see scan_pipeline.ready_for_selection in /api/config."
         ),
         required_state="Staging load tests for 1000 users, 30k daily evaluations, provider outages, and tenant isolation.",
     ),

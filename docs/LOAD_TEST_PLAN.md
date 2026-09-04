@@ -88,7 +88,7 @@ python tools\provider_resilience_test.py
 Command:
 
 ```powershell
-& 'C:\stable-diffusion-ui\installer_files\env\python.exe' tools\load_test.py --users 1000 --tickers 30
+python tools\load_test.py --users 1000 --tickers 30
 ```
 
 Result:
@@ -109,7 +109,7 @@ Remaining required staging tests:
 - Hosted health smoke command:
 
 ```powershell
-& 'C:\stable-diffusion-ui\installer_files\env\python.exe' tools\host_load_test.py --url https://stockscreeningver10.vercel.app/api/health --requests 1000 --concurrency 25 --timeout 15
+python tools\host_load_test.py --url https://stockscreeningver10.vercel.app/api/health --requests 1000 --concurrency 25 --timeout 15
 ```
 
 Hosted health smoke result:
@@ -153,7 +153,7 @@ python tools\queue_load_test.py --users 1000 --tickers 30 --worker-limit 100
 Command:
 
 ```powershell
-C:\stable-diffusion-ui\installer_files\env\python.exe tools\host_queue_load_test.py --base-url https://stockscreeningver10.vercel.app --users 10 --concurrency 2 --tickers PLTR,MSTR,VST --timeout 30 --poll-seconds 90 --trigger-worker
+python tools\host_queue_load_test.py --base-url https://stockscreeningver10.vercel.app --users 10 --concurrency 2 --tickers PLTR,MSTR,VST --timeout 30 --poll-seconds 90 --trigger-worker
 ```
 
 Result:
@@ -168,7 +168,7 @@ Result:
 Higher-load single-runner attempt:
 
 ```powershell
-C:\stable-diffusion-ui\installer_files\env\python.exe tools\host_queue_load_test.py --base-url https://stockscreeningver10.vercel.app --users 50 --concurrency 2 --tickers PLTR,MSTR,VST --timeout 30 --poll-seconds 120 --trigger-worker
+python tools\host_queue_load_test.py --base-url https://stockscreeningver10.vercel.app --users 50 --concurrency 2 --tickers PLTR,MSTR,VST --timeout 30 --poll-seconds 120 --trigger-worker
 ```
 
 Result:
@@ -197,7 +197,7 @@ Before this run, endpoint-specific durable rate-limit buckets were added:
 Command:
 
 ```powershell
-C:\stable-diffusion-ui\installer_files\env\python.exe tools\host_queue_load_test.py --base-url https://stockscreeningver10.vercel.app --users 1000 --concurrency 20 --tickers PLTR,MSTR,VST --timeout 30 --poll-seconds 300 --trigger-worker --worker-limit 100 --simulate-distributed-ips --confirm-production-load
+python tools\host_queue_load_test.py --base-url https://stockscreeningver10.vercel.app --users 1000 --concurrency 20 --tickers PLTR,MSTR,VST --timeout 30 --poll-seconds 300 --trigger-worker --worker-limit 100 --simulate-distributed-ips --confirm-production-load
 ```
 
 Result:

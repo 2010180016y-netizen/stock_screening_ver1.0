@@ -44,6 +44,13 @@ PLANNED_SETTINGS = {
 
 LINK = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
 
+# Records of what was run in the past, not instructions. Their commands are history.
+HISTORICAL_DOCS = {"QA_REPORT.md"} | DESIGN_DOCS
+
+# An interpreter this project was once documented against. The machine is gone, so any
+# command still carrying it fails before it starts.
+DEAD_INTERPRETER = "C:\\stable-diffusion-ui"
+
 
 def tracked_markdown() -> list[Path]:
     output = subprocess.run(
@@ -100,6 +107,34 @@ def check_commands(paths: list[Path]) -> list[str]:
     return problems
 
 
+def check_tool_commands(paths: list[Path]) -> list[str]:
+    """Every `python tools/x.py` in the docs must name a script that exists.
+
+    Docs accumulate commands for tools that were renamed or never written, and a reader
+    only finds out by pasting one into a terminal. The dead interpreter path is called out
+    by name because it survived in six files: the machine it referred to is long gone, so
+    every command carrying it fails before it starts.
+    """
+    problems: list[str] = []
+    for path in paths:
+        if path.name in HISTORICAL_DOCS:
+            continue
+        in_code = False
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            if line.lstrip().startswith("```"):
+                in_code = not in_code
+                continue
+            # Only code fences are flagged. Prose that mentions the dead path in order to
+            # warn about it - which is how several files correctly handle it - is not a
+            # command and must not fail the build.
+            if in_code and DEAD_INTERPRETER in line:
+                problems.append(f"{_rel(path)}:{number}: command uses an interpreter path that no longer exists")
+            for script in re.findall(r"tools[/\\]([a-z_0-9]+\.py)", line):
+                if not (ROOT / "tools" / script).is_file():
+                    problems.append(f"{_rel(path)}:{number}: tools/{script} does not exist")
+    return problems
+
+
 def check_endpoints(paths: list[Path]) -> list[str]:
     source = "".join(
         (ROOT / "vcb_alt" / name).read_text(encoding="utf-8") for name in ("web_api.py", "web.py")
@@ -132,14 +167,14 @@ def _rel(path: Path) -> str:
 def main() -> int:
     paths = tracked_markdown()
     problems: list[str] = []
-    for check in (check_links, check_settings, check_commands, check_endpoints):
+    for check in (check_links, check_settings, check_commands, check_tool_commands, check_endpoints):
         problems.extend(check(paths))
     if problems:
         print(f"documentation is out of step with the code ({len(problems)} problems):")
         for problem in problems:
             print(f"  {problem}")
         return 1
-    print(f"docs ok ({len(paths)} files: links, settings, commands, endpoints)")
+    print(f"docs ok ({len(paths)} files: links, settings, commands, tools, endpoints)")
     return 0
 
 

@@ -42,6 +42,7 @@ TENANT_AUTHENTICATED_PATHS = frozenset(
 UNAUTHENTICATED_PATHS = frozenset(
     {
         "/api/health",
+        "/api/version",
         "/api/auth/register",
         "/api/auth/login",
         "/api/admin/run-worker",

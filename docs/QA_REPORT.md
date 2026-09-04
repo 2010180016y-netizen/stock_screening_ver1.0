@@ -1,5 +1,9 @@
 # QA Report
 
+> **Record of past runs, not instructions.** The commands below were run on a machine
+> with an interpreter at `C:\stable-diffusion-ui\installer_files\env\python.exe`. That
+> path no longer exists; use `python` (3.11.9 on PATH). See [TESTING.md](../TESTING.md).
+
 QA date: 2026-05-18 KST
 
 Latest verification update: 2026-06-10 KST

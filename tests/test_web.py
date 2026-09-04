@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
 
+from vcb_alt import build_info
 from vcb_alt.config import AppConfig
 from vcb_alt.db import add_watchlist, connect, init_db
 from vcb_alt.performance import benchmark_scoring
 from vcb_alt.web_auth import (
     TENANT_AUTHENTICATED_PATHS,
+    UNAUTHENTICATED_PATHS,
     is_tenant_authenticated_path,
     requires_shared_token,
 )
@@ -546,3 +549,48 @@ class _JsonHandler:
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BuildIdentityTests(unittest.TestCase):
+    """A deploy that silently did not happen is indistinguishable from one that did.
+
+    Production served a four-day-old build while the branch had twenty-two newer commits;
+    every route answered correctly. /api/version is how that becomes visible.
+    """
+
+    def setUp(self) -> None:
+        build_info.build_info.cache_clear()
+
+    def tearDown(self) -> None:
+        build_info.build_info.cache_clear()
+
+    def test_version_endpoint_needs_no_token(self) -> None:
+        self.assertIn("/api/version", UNAUTHENTICATED_PATHS)
+
+    def test_platform_build_stamp_wins_over_git(self) -> None:
+        with patch.dict(os.environ, {"VERCEL_GIT_COMMIT_SHA": "a" * 40}, clear=False):
+            info = build_info.build_info()
+        self.assertEqual(info["commit"], "a" * build_info.COMMIT_LENGTH)
+        self.assertEqual(info["commit_source"], "VERCEL_GIT_COMMIT_SHA")
+
+    def test_an_override_beats_the_platform_stamp(self) -> None:
+        env = {"VCB_ALT_BUILD_COMMIT": "b" * 40, "VERCEL_GIT_COMMIT_SHA": "c" * 40}
+        with patch.dict(os.environ, env, clear=False):
+            info = build_info.build_info()
+        self.assertEqual(info["commit_source"], "VCB_ALT_BUILD_COMMIT")
+
+    def test_a_bundle_without_git_or_a_stamp_says_unknown(self) -> None:
+        """A serverless bundle ships no .git, so this must not crash or hang."""
+        cleared = {name: "" for name in build_info.COMMIT_ENV_VARS}
+        with patch.dict(os.environ, cleared, clear=False):
+            with patch.object(build_info, "ROOT", Path(tempfile.gettempdir()) / "no-such-checkout"):
+                info = build_info.build_info()
+        self.assertEqual(info["commit"], "unknown")
+        self.assertEqual(info["commit_source"], "unavailable")
+
+    def test_the_endpoint_reports_the_build_and_nothing_else(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = make_config(Path(tmp))
+            result = handle_api(config, "GET", "/api/version", "", None, {})
+        self.assertTrue(result.ok)
+        self.assertEqual(sorted(result.data.keys()), ["commit", "commit_source", "version"])
