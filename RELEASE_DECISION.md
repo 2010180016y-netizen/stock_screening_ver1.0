@@ -10,6 +10,18 @@ Latest deployment update: 2026-06-04 KST
 
 NOT_READY_FOR_PUBLIC_1000_USER_SAAS.
 
+2026-09-02 correction: earlier entries below treat a working Alpaca credential as a
+precondition for a live market scan. That is no longer true. The prefilter is pluggable
+and the keyless Yahoo path produces real end-of-day market data, so a deployment with a
+Finnhub key alone can reach full data coverage and a selection. Alpaca adds
+near-real-time quotes and remains optional. The gate to check is
+`scan_pipeline.ready_for_selection` in `/api/config`, not Alpaca diagnostics.
+
+The fail-closed check itself carried the same assumption: it required every snapshot
+source to start with `alpaca:`, which silently rejected scans built entirely on real
+Yahoo data. It now matches an allowlist of real market feeds and still refuses sample,
+manual, and unrecognised sources.
+
 2026-08-17 security action: the operator-trial deployment access token was previously committed in plain text in `OPERATOR_TRIAL_GUIDE.md`, `PROVIDER_KEYS_SETUP.md`, and this file, alongside the live deployment URL. Those occurrences are now replaced with `<ROTATED-SEE-VERCEL-ENV>`, and `tools/secret_scan.py` fails the build if a live-looking secret is reintroduced. The old value remains in git history, so it is only truly revoked once `VCB_ALT_WEB_ACCESS_TOKEN` is rotated in the Vercel project and redeployed. Treat the repository as containing a historically leaked token until that rotation is confirmed.
 
 2026-06-10 blocker-closure update: production SaaS hardening now disables query-string access tokens and query-string worker tokens in production mode, requires `POST` for protected worker execution, trusts `X-Forwarded-For` only when trusted proxy mode is explicitly enabled, applies JSON request size/parse guards, separates tenant-scoped provider-alert visibility from global operator visibility, and prevents tenant market-universe jobs from executing provider-heavy scans inline. User-facing scan requests now rely on fresh durable worker-owned market snapshots or return pending/enqueued status. Dashboard/detail/login/legal HTML, CSS, and served JS are extracted into `vcb_alt/web_assets/`; `web.py` loads those UTF-8 files first and keeps embedded constants only as fallback. Served dashboard/detail JavaScript was verified with valid UTF-8 Korean strings, and desktop/mobile browser smoke passed without horizontal overflow. Local verification passed full unit tests, lint, typecheck, compile smoke, served JS checks, extracted asset checks, and local web smoke. This improves owner/operator-trial safety, but it is not public-launch approval: the hosted secret-backed 1000-user worker-completion gate was not run from this workstation because `gh` is unavailable, and live Alpaca/Finnhub/Yahoo production market-universe evidence still must be proven. Current status remains `public_launch_ready=false` and `NOT_READY_FOR_1000_USER_SAAS`.
@@ -54,7 +66,7 @@ Fifth 2026-05-22 update: the code now includes per-user export/delete APIs, tena
 
 2026-05-24 dashboard scan-button update: the deployed dashboard now routes `Run scan` through tenant-scoped `/api/user/scan` in SaaS mode, auto-recovers browser demo sessions, seeds a starter watchlist, and returns final selection in the scan response. Production API smoke scanned `7` tickers in `69ms` and selected `PLTR`, `VST`, `MSTR`; browser verification showed `Scan completed in 21 ms` and rendered candidate results on deployment `dpl_EJwfpEvi9SnziMreYcbGAMeyVKGR`.
 
-Current conclusion: it is suitable only for owner/operator trial and internal verification. It is not suitable for external beta, public SaaS, or 1000-user public operation until Alpaca diagnostics return `ready=true`, production `/api/user/scan` returns live market-universe candidates without sample fallback, the protected hosted 1000-user worker completion test passes with `load_test_passed=true`, and the remaining auth, monitoring, backup/restore, legal, and support gates are cleared. `/api/release-status` may report `production_saas_ready=true` for configuration posture, but that is not public-launch approval and must not override `public_launch_ready=false`.
+Current conclusion: it is suitable only for owner/operator trial and internal verification. It is not suitable for external beta, public SaaS, or 1000-user public operation until `/api/config` reports `scan_pipeline.ready_for_selection=true`, production `/api/user/scan` returns live market-universe candidates without sample fallback, the protected hosted 1000-user worker completion test passes with `load_test_passed=true`, and the remaining auth, monitoring, backup/restore, legal, and support gates are cleared. `/api/release-status` may report `production_saas_ready=true` for configuration posture, but that is not public-launch approval and must not override `public_launch_ready=false`.
 
 ## 2. Resolved P0/P1 Items
 

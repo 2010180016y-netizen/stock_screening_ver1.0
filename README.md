@@ -332,13 +332,19 @@ is not ready to ship. Implementation handoff notes are in [codex_handoff/](codex
 
 ## Known Limitations
 
-- Yahoo/Stooq market providers are end-of-day price/volume only. Configure Alpaca and Finnhub/SEC layers for near-real-time quote, fundamentals, news, filings, short interest, options, and analyst trend context.
+- Yahoo/Stooq market providers are end-of-day price/volume only. That is enough to reach a
+  selection: Yahoo covers the market group and Finnhub covers fundamentals, catalyst, and
+  positioning, which together reach full data coverage. Alpaca adds near-real-time quotes
+  and is optional - see [market data providers](docs/MARKET_DATA_PROVIDERS.md).
 - Five-year detail charts are daily provider charts. True streaming real-time charts require a licensed real-time market-data provider.
 - Manual CSV mode can use your own current data, but the app does not verify that the data is market-accurate.
 - Public demo mode has a deployment-token gate; SaaS mode has per-user auth APIs but still lacks OAuth/MFA production hardening.
 - Neon PostgreSQL is connected for the current production SaaS control-plane smoke path.
-- Queue APIs, worker command, protected worker endpoint, and daily Vercel Cron route exist. Historical queue tests passed, but they do not prove current live-provider market-universe readiness while Alpaca diagnostics return `ready=false`.
-- Hosted `/api/health` load smoke passed after PostgreSQL cutover; it does not replace current scan-heavy queue/provider load testing after live provider credentials are fixed.
+- Queue APIs, worker command, protected worker endpoint, and daily Vercel Cron route exist.
+  Historical queue tests passed, but they do not prove that a given deployment can reach a
+  selection. Check `scan_pipeline.ready_for_selection` in `/api/config` for that.
+- Hosted `/api/health` load smoke passed after PostgreSQL cutover; it does not replace
+  scan-heavy queue/provider load testing against a deployment that reaches a selection.
 - Terms, Privacy, and Risk Disclosure drafts exist, but they are not legal-reviewed launch documents.
 - No automatic trading or broker integration.
 - Decision-support only; the CLI does not provide trading instructions.
