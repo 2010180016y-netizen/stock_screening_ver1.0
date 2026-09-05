@@ -7,6 +7,9 @@ from vcb_alt.sample_data import get_snapshot
 from vcb_alt.scoring import (
     ARCHETYPE_MAX_POINTS,
     CONFIRMATION_BONUS_MAX,
+    MOMENTUM_MAX_POINTS,
+    _market_momentum_score,
+    _ramped,
     ENTRY_SCORE_THRESHOLD,
     score_confirmation_bonus,
     _raw_archetype_points,
@@ -236,3 +239,114 @@ class ConfirmationBonusTests(unittest.TestCase):
         double = {"A_AI_TECH": 70, "F_PICK_SHOVEL": 70}
         self.assertEqual(score_confirmation_bonus(single, "A_AI_TECH"), 0)
         self.assertGreater(score_confirmation_bonus(double, "A_AI_TECH"), 0)
+
+
+class ThresholdRampTests(unittest.TestCase):
+    """A rounding difference used to be worth a large award.
+
+    A 20% revenue surprise scored 25 points and a 19.9% surprise scored nothing. Provider
+    revisions of that size are routine, so candidates appeared and disappeared on noise
+    rather than on anything about the company.
+    """
+
+    def _snapshot(self, **fields: object) -> StockSnapshot:
+        base = {
+            "ticker": "TST", "company_name": "Test", "price": 12.0,
+            "source": "yahoo", "data_as_of": "2026-09-01",
+        }
+        base.update(fields)
+        return StockSnapshot(**base)  # type: ignore[arg-type]
+
+    def test_the_ramp_shape(self) -> None:
+        self.assertEqual(_ramped(20.0, 20, 25), 25, "at the threshold, full points")
+        self.assertEqual(_ramped(99.0, 20, 25), 25, "above it, still full points")
+        self.assertEqual(_ramped(15.0, 20, 25), 0, "a full band below, nothing")
+        self.assertEqual(_ramped(0.0, 20, 25), 0)
+        self.assertEqual(_ramped(17.5, 20, 25), 12, "half a band, about half the points")
+        self.assertGreater(_ramped(19.9, 20, 25), 23, "a rounding difference is worth ~nothing")
+
+    def test_the_ramp_never_exceeds_its_points(self) -> None:
+        for value in (-50.0, 0.0, 19.0, 20.0, 1000.0):
+            with self.subTest(value=value):
+                self.assertLessEqual(_ramped(value, 20, 25), 25)
+                self.assertGreaterEqual(_ramped(value, 20, 25), 0)
+
+    def test_a_hair_below_a_threshold_no_longer_collapses_the_score(self) -> None:
+        for field, under, over in (
+            ("revenue_surprise_pct", 19.9, 20.0),
+            ("short_interest_pct", 24.9, 25.0),
+            ("sector_rs_12w_pp", 9.9, 10.0),
+        ):
+            with self.subTest(field=field):
+                low = evaluate_snapshot(self._snapshot(**{field: under})).combined_score
+                high = evaluate_snapshot(self._snapshot(**{field: over})).combined_score
+                self.assertLessEqual(high - low, 3, f"{field} still behaves like a cliff")
+
+    def test_booleans_and_counts_stay_binary(self) -> None:
+        """There is no half of a catalyst and no half of an insider."""
+        without = evaluate_snapshot(self._snapshot(fda_milestone_90d=False, market_cap_m=300.0))
+        with_flag = evaluate_snapshot(self._snapshot(fda_milestone_90d=True, market_cap_m=300.0))
+        self.assertGreater(with_flag.combined_score, without.combined_score)
+        one = evaluate_snapshot(self._snapshot(insider_buy_count_90d=1, revenue_surprise_pct=25.0))
+        two = evaluate_snapshot(self._snapshot(insider_buy_count_90d=2, revenue_surprise_pct=25.0))
+        self.assertGreater(two.combined_score, one.combined_score)
+
+
+class MomentumNormalisationTests(unittest.TestCase):
+    """G_TECHNICAL_MOMENTUM has two formulas that do not award the same totals.
+
+    The intraday formula tops out at 100 and the end-of-day one at 115, and both were
+    clipped at 100 - so an end-of-day name needed more of its available evidence to reach
+    any given score, and the two were then compared directly with each other and with the
+    six fundamental archetypes.
+    """
+
+    def _maxed(self, source: str, **fields: object) -> StockSnapshot:
+        base: dict[str, object] = {
+            "ticker": "MAX", "company_name": "Max", "price": 5.0,
+            "source": source, "data_as_of": "2026-09-01",
+        }
+        base.update(fields)
+        return StockSnapshot(**base)  # type: ignore[arg-type]
+
+    def test_momentum_maxima_are_current(self) -> None:
+        """Same guard as the archetype maxima: a weight change must not leave these stale."""
+        end_of_day = self._maxed(
+            "yahoo", trend_template_score=100, surge_score=100, return_12w_pct=99.0,
+            sector_rs_12w_pp=99.0, price_vs_50dma_pct=99.0, drawdown_52w_pct=0.0,
+        )
+        intraday = self._maxed(
+            "alpaca:iex", surge_score=100, intraday_change_pct=99.0,
+            breakout_volume_ratio=9.0, intraday_volume=5_000_000.0,
+        )
+        for snapshot, key in ((end_of_day, "end_of_day"), (intraday, "alpaca")):
+            with self.subTest(branch=key):
+                raw_max = MOMENTUM_MAX_POINTS[key]
+                self.assertEqual(
+                    _market_momentum_score(snapshot), 100,
+                    f"a fully satisfied {key} formula should score 100 against {raw_max}",
+                )
+
+    def test_both_branches_reach_the_same_ceiling(self) -> None:
+        end_of_day = self._maxed(
+            "yahoo", trend_template_score=100, surge_score=100, return_12w_pct=99.0,
+            sector_rs_12w_pp=99.0, price_vs_50dma_pct=99.0, drawdown_52w_pct=0.0,
+        )
+        intraday = self._maxed(
+            "alpaca:iex", surge_score=100, intraday_change_pct=99.0,
+            breakout_volume_ratio=9.0, intraday_volume=5_000_000.0,
+        )
+        self.assertEqual(_market_momentum_score(end_of_day), _market_momentum_score(intraday))
+
+    def test_stale_data_still_scores_zero_on_both_branches(self) -> None:
+        """Momentum from a stale quote is not momentum. This gate must survive."""
+        for source in ("yahoo", "alpaca:iex"):
+            with self.subTest(source=source):
+                stale = self._maxed(
+                    source, data_quality="stale-intraday", trend_template_score=100,
+                    surge_score=100, intraday_change_pct=99.0,
+                )
+                self.assertEqual(_market_momentum_score(stale), 0)
+
+    def test_an_unknown_source_scores_zero(self) -> None:
+        self.assertEqual(_market_momentum_score(self._maxed("sample", surge_score=100)), 0)

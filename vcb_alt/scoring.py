@@ -28,6 +28,32 @@ def _points(condition: bool, value: int) -> int:
     return value if condition else 0
 
 
+def _ramped(value: float, threshold: float, points: int, *, band: float | None = None) -> int:
+    """Award points on a ramp rather than a cliff.
+
+    A hard comparison turns a rounding difference into a large award: a 20% revenue
+    surprise scored 25 points and a 19.9% surprise scored nothing. Provider revisions of
+    that size are routine, so candidates appeared and disappeared on noise.
+
+    Full points at or above the threshold, nothing at or below threshold minus band, and
+    a straight line between. The band defaults to a quarter of the threshold, which keeps
+    the ramp proportional to the quantity being measured.
+
+    Only continuous quantities use this. Booleans stay binary because they are, counts
+    stay binary because a half-insider does not exist, and range conditions keep their own
+    shape.
+    """
+    if band is None:
+        band = abs(threshold) * 0.25
+    if band <= 0:
+        return points if value >= threshold else 0
+    if value >= threshold:
+        return points
+    if value <= threshold - band:
+        return 0
+    return round(points * (value - (threshold - band)) / band)
+
+
 def _clamp_score(value: int) -> int:
     return max(0, min(100, int(value)))
 
@@ -52,8 +78,16 @@ ARCHETYPE_MAX_POINTS = {
 }
 
 
+# G_TECHNICAL_MOMENTUM has two formulas with different totals; see _market_momentum_score.
+MOMENTUM_MAX_POINTS = {"alpaca": 100, "end_of_day": 115}
+
+
 def _normalise(raw: int, archetype: str) -> int:
-    return max(0, min(100, round(raw * 100 / ARCHETYPE_MAX_POINTS[archetype])))
+    return _normalise_to(raw, ARCHETYPE_MAX_POINTS[archetype])
+
+
+def _normalise_to(raw: int, maximum: int) -> int:
+    return max(0, min(100, round(raw * 100 / maximum)))
 
 
 def _setup_strength(score: int) -> str:
@@ -81,30 +115,30 @@ def _raw_archetype_points(snapshot: StockSnapshot) -> dict[str, int]:
     market_momentum_score = _market_momentum_score(snapshot)
     scores = {
         "A_AI_TECH": (
-            _points(max(snapshot.revenue_surprise_pct, snapshot.earnings_surprise_pct) >= 20, 25)
-            + _points(snapshot.revenue_acceleration_pp >= 5, 20)
-            + _points(snapshot.sector_rs_12w_pp >= 10, 20)
+            _ramped(max(snapshot.revenue_surprise_pct, snapshot.earnings_surprise_pct), 20, 25)
+            + _ramped(snapshot.revenue_acceleration_pp, 5, 20)
+            + _ramped(snapshot.sector_rs_12w_pp, 10, 20)
             + _points(snapshot.insider_buy_count_90d >= 2, 15)
-            + _points(snapshot.breakout_volume_ratio >= 1.5, 10)
+            + _ramped(snapshot.breakout_volume_ratio, 1.5, 10)
             + _points(snapshot.forward_guidance_raised, 10)
-            + _points(snapshot.analyst_revision_score >= 35, 8)
+            + _ramped(snapshot.analyst_revision_score, 35, 8)
             + trend_bonus
         ),
         "B_CRYPTO_PIVOT": (
-            _points(snapshot.btc_6m_return_pct >= 30, 25)
+            _ramped(snapshot.btc_6m_return_pct, 30, 25)
             + _points(snapshot.news_catalyst_30d, 25)
-            + _points(snapshot.mining_capacity_increase_pct >= 30, 15)
+            + _ramped(snapshot.mining_capacity_increase_pct, 30, 15)
             + _points(snapshot.above_200dma, 10)
-            + _points(snapshot.volume_z_score_30d >= 2.5, 15)
-            + _points(snapshot.drawdown_recovery_pct >= 20, 10)
+            + _ramped(snapshot.volume_z_score_30d, 2.5, 15)
+            + _ramped(snapshot.drawdown_recovery_pct, 20, 10)
             + surge_bonus
         ),
         "C_QUANTUM": (
             _points(snapshot.float_shares_m > 0 and snapshot.float_shares_m < 50, 20)
             + _points(0 < snapshot.market_cap_m < 500, 20)
             + _points(snapshot.news_catalyst_30d, 25)
-            + _points(snapshot.peer_30d_return_pct >= 30, 20)
-            + _points(snapshot.volume_z_score_30d >= 3, 15)
+            + _ramped(snapshot.peer_30d_return_pct, 30, 20)
+            + _ramped(snapshot.volume_z_score_30d, 3, 15)
             + _points(1 <= price <= 10, 20)
             + surge_bonus
         ),
@@ -114,24 +148,24 @@ def _raw_archetype_points(snapshot: StockSnapshot) -> dict[str, int]:
             + _points(0 < snapshot.short_interest_pct < 10, 15)
             + _points(50 <= snapshot.market_cap_m <= 500, 20)
             + _points(snapshot.news_catalyst_30d, 20)
-            + _points(snapshot.trend_template_score >= 50, 10)
+            + _ramped(snapshot.trend_template_score, 50, 10)
         ),
         "E_SHORT_SQUEEZE": (
-            _points(snapshot.short_interest_pct >= 25, 30)
-            + _points(snapshot.days_to_cover >= 5, 15)
-            + _points(snapshot.borrow_rate_pct >= 50, 15)
-            + _points(snapshot.call_oi_change_pct >= 200, 10)
-            + _points(snapshot.volume_z_score_30d >= 2.5, 15)
+            _ramped(snapshot.short_interest_pct, 25, 30)
+            + _ramped(snapshot.days_to_cover, 5, 15)
+            + _ramped(snapshot.borrow_rate_pct, 50, 15)
+            + _ramped(snapshot.call_oi_change_pct, 200, 10)
+            + _ramped(snapshot.volume_z_score_30d, 2.5, 15)
             + _points(snapshot.news_catalyst_30d, 15)
             + surge_bonus
         ),
         "F_PICK_SHOVEL": (
             _points(snapshot.data_center_narrative, 25)
-            + _points(snapshot.sector_rs_12w_pp >= 20, 20)
+            + _ramped(snapshot.sector_rs_12w_pp, 20, 20)
             + _points(snapshot.above_200dma, 15)
-            + _points(max(snapshot.eps_revision_pct, snapshot.analyst_revision_score) >= 20, 20)
-            + _points(snapshot.revenue_acceleration_pp >= 3, 10)
-            + _points(snapshot.breakout_volume_ratio >= 1.4, 10)
+            + _ramped(max(snapshot.eps_revision_pct, snapshot.analyst_revision_score), 20, 20)
+            + _ramped(snapshot.revenue_acceleration_pp, 3, 10)
+            + _ramped(snapshot.breakout_volume_ratio, 1.4, 10)
             + trend_bonus
         ),
         "G_TECHNICAL_MOMENTUM": market_momentum_score,
@@ -140,33 +174,38 @@ def _raw_archetype_points(snapshot: StockSnapshot) -> dict[str, int]:
 
 
 def _market_momentum_score(snapshot: StockSnapshot) -> int:
+    """Technical momentum, normalised so both data sources mean the same thing.
+
+    This archetype has two formulas - one for intraday snapshots, one for end-of-day bars
+    - and they do not award the same totals: 100 against 115. Both were clipped at 100, so
+    an end-of-day name needed more of its available evidence to reach any given score than
+    an intraday one, and the two were then compared directly against each other and
+    against the six fundamental archetypes.
+    """
     base_source = snapshot.source.split("+", 1)[0]
-    if base_source.startswith("alpaca"):
-        if snapshot.data_quality.startswith("stale"):
-            return 0
-        score = 0
-        score += int(snapshot.surge_score * 0.45)
-        score += _points(snapshot.intraday_change_pct >= 2, 10)
-        score += _points(snapshot.intraday_change_pct >= 5, 15)
-        score += _points(snapshot.breakout_volume_ratio >= 1.5, 10)
-        score += _points(snapshot.breakout_volume_ratio >= 2.5, 10)
-        score += _points(snapshot.intraday_volume >= 500_000, 5)
-        score += _points(snapshot.intraday_volume >= 2_000_000, 5)
-        return _clamp_score(score)
-    if base_source not in {"stooq", "yahoo"}:
-        return 0
     if snapshot.data_quality.startswith("stale"):
         return 0
-    score = 0
-    score += int(snapshot.trend_template_score * 0.45)
+    if base_source.startswith("alpaca"):
+        score = int(snapshot.surge_score * 0.45)
+        score += _ramped(snapshot.intraday_change_pct, 2, 10)
+        score += _ramped(snapshot.intraday_change_pct, 5, 15)
+        score += _ramped(snapshot.breakout_volume_ratio, 1.5, 10)
+        score += _ramped(snapshot.breakout_volume_ratio, 2.5, 10)
+        score += _ramped(snapshot.intraday_volume, 500_000, 5)
+        score += _ramped(snapshot.intraday_volume, 2_000_000, 5)
+        return _normalise_to(score, MOMENTUM_MAX_POINTS["alpaca"])
+    if base_source not in {"stooq", "yahoo"}:
+        return 0
+    score = int(snapshot.trend_template_score * 0.45)
     score += int(snapshot.surge_score * 0.25)
-    score += _points(snapshot.return_12w_pct >= 8, 10)
-    score += _points(snapshot.return_12w_pct >= 20, 10)
+    score += _ramped(snapshot.return_12w_pct, 8, 10)
+    score += _ramped(snapshot.return_12w_pct, 20, 10)
+    # A threshold of zero has no proportional band, so this stays a plain comparison.
     score += _points(snapshot.sector_rs_12w_pp >= 0, 5)
-    score += _points(snapshot.sector_rs_12w_pp >= 10, 10)
-    score += _points(snapshot.price_vs_50dma_pct >= -3, 5)
-    score += _points(snapshot.drawdown_52w_pct >= -12, 5)
-    return _clamp_score(score)
+    score += _ramped(snapshot.sector_rs_12w_pp, 10, 10)
+    score += _ramped(snapshot.price_vs_50dma_pct, -3, 5)
+    score += _ramped(snapshot.drawdown_52w_pct, -12, 5)
+    return _normalise_to(score, MOMENTUM_MAX_POINTS["end_of_day"])
 
 
 def score_complexity_modifier(snapshot: StockSnapshot, primary_archetype: str) -> int:
