@@ -8,6 +8,10 @@ from vcb_alt.scoring import (
     ARCHETYPE_MAX_POINTS,
     CONFIRMATION_BONUS_MAX,
     MOMENTUM_MAX_POINTS,
+    SIZE_RISK_FLOOR,
+    SMALL_CAP_M,
+    FULL_SIZE_CAP_M,
+    size_risk_factor,
     _market_momentum_score,
     _ramped,
     ENTRY_SCORE_THRESHOLD,
@@ -350,3 +354,61 @@ class MomentumNormalisationTests(unittest.TestCase):
 
     def test_an_unknown_source_scores_zero(self) -> None:
         self.assertEqual(_market_momentum_score(self._maxed("sample", surge_score=100)), 0)
+
+
+class SizeRiskTests(unittest.TestCase):
+    """Position size was a function of conviction alone.
+
+    Two names with the same score got the same size whether one was a $300m biotech or a
+    $3tn megacap. The archetype caps handle this crudely - high-volatility archetypes get
+    18% rather than 25% - but inside an archetype every name was sized identically.
+    """
+
+    def _snapshot(self, **fields: object) -> StockSnapshot:
+        base = {
+            "ticker": "TST", "company_name": "Test", "price": 12.0,
+            "source": "yahoo", "data_as_of": "2026-09-01",
+        }
+        base.update(fields)
+        return StockSnapshot(**base)  # type: ignore[arg-type]
+
+    def test_a_small_cap_is_sized_down_and_a_large_one_is_not(self) -> None:
+        self.assertEqual(size_risk_factor(self._snapshot(market_cap_m=300.0)), SIZE_RISK_FLOOR)
+        self.assertEqual(size_risk_factor(self._snapshot(market_cap_m=50_000.0)), 1.0)
+
+    def test_the_haircut_eases_off_rather_than_stepping(self) -> None:
+        mid = size_risk_factor(self._snapshot(market_cap_m=(SMALL_CAP_M + FULL_SIZE_CAP_M) / 2))
+        self.assertGreater(mid, SIZE_RISK_FLOOR)
+        self.assertLess(mid, 1.0)
+        rising = [
+            size_risk_factor(self._snapshot(market_cap_m=cap))
+            for cap in (600.0, 1500.0, 3000.0, 4500.0, 6000.0)
+        ]
+        self.assertEqual(rising, sorted(rising), "the haircut should ease off monotonically")
+
+    def test_an_unknown_market_cap_is_not_treated_as_risk(self) -> None:
+        """An unknown is not evidence of risk.
+
+        Treating a missing cap as the smallest would silently shrink every position whose
+        fundamentals were not enriched.
+        """
+        self.assertEqual(size_risk_factor(self._snapshot(market_cap_m=0.0)), 1.0)
+
+    def test_a_deep_drawdown_cuts_further(self) -> None:
+        shallow = size_risk_factor(self._snapshot(market_cap_m=50_000.0, drawdown_52w_pct=-10.0))
+        deep = size_risk_factor(self._snapshot(market_cap_m=50_000.0, drawdown_52w_pct=-55.0))
+        self.assertEqual(shallow, 1.0)
+        self.assertLess(deep, shallow)
+
+    def test_the_factor_stays_inside_its_bounds(self) -> None:
+        """A proxy this rough must not be able to dominate the decision."""
+        worst = size_risk_factor(self._snapshot(market_cap_m=1.0, drawdown_52w_pct=-95.0))
+        self.assertGreaterEqual(worst, SIZE_RISK_FLOOR)
+        best = size_risk_factor(self._snapshot(market_cap_m=9_000_000.0, drawdown_52w_pct=0.0))
+        self.assertLessEqual(best, 1.0)
+
+    def test_size_reflects_the_haircut_end_to_end(self) -> None:
+        small = evaluate_snapshot(get_snapshot("RGTI"))
+        large = evaluate_snapshot(get_snapshot("PLTR"))
+        self.assertTrue(small.can_enter and large.can_enter)
+        self.assertLess(small.suggested_size_pct, large.suggested_size_pct)

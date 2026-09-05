@@ -23,6 +23,22 @@ VOLUME_SPIKE_ARCHETYPES = frozenset({"B_CRYPTO_PIVOT", "C_QUANTUM", "E_SHORT_SQU
 # primary thesis is what the candidate is being put forward on.
 CONFIRMATION_BONUS_MAX = 10
 
+# Position size was a function of conviction alone: two names with the same score got the
+# same size whether one was a $300m biotech or a $3tn megacap. The archetype caps handle
+# this crudely - high-volatility archetypes get 18% instead of 25% - but inside an
+# archetype every name was sized identically.
+#
+# These are proxies, not a volatility measure. The snapshot carries no return series, so
+# nothing here can compute realised volatility; market cap and distance from the 52-week
+# high are the risk-shaped facts actually available. The floor keeps a proxy this rough
+# from dominating the decision, and a real measure needs the point-in-time price history
+# the app does not yet retain.
+SIZE_RISK_FLOOR = 0.6
+SMALL_CAP_M = 500.0
+FULL_SIZE_CAP_M = 5000.0
+DEEP_DRAWDOWN_PCT = -40.0
+DEEP_DRAWDOWN_HAIRCUT = 0.9
+
 
 def _points(condition: bool, value: int) -> int:
     return value if condition else 0
@@ -263,6 +279,25 @@ def score_confirmation_bonus(archetype_scores: dict[str, int], primary_archetype
     return min(CONFIRMATION_BONUS_MAX, round((second - ENTRY_SCORE_THRESHOLD) / span * CONFIRMATION_BONUS_MAX))
 
 
+def size_risk_factor(snapshot: StockSnapshot) -> float:
+    """How much to cut a position for risk the score does not price. 0.6 to 1.0.
+
+    A missing market cap returns no haircut rather than the maximum one: an unknown is not
+    evidence of risk, and inventing one would silently shrink every position whose
+    fundamentals were not enriched.
+    """
+    factor = 1.0
+    if snapshot.market_cap_m > 0:
+        if snapshot.market_cap_m <= SMALL_CAP_M:
+            factor = SIZE_RISK_FLOOR
+        elif snapshot.market_cap_m < FULL_SIZE_CAP_M:
+            span = FULL_SIZE_CAP_M - SMALL_CAP_M
+            factor = SIZE_RISK_FLOOR + (1.0 - SIZE_RISK_FLOOR) * (snapshot.market_cap_m - SMALL_CAP_M) / span
+    if snapshot.drawdown_52w_pct <= DEEP_DRAWDOWN_PCT:
+        factor *= DEEP_DRAWDOWN_HAIRCUT
+    return max(SIZE_RISK_FLOOR, min(1.0, factor))
+
+
 def evaluate_snapshot(snapshot: StockSnapshot) -> EvaluationResult:
     ticker = validate_ticker(snapshot.ticker)
     price = validate_positive_number(snapshot.price, "price")
@@ -278,7 +313,8 @@ def evaluate_snapshot(snapshot: StockSnapshot) -> EvaluationResult:
 
     cap = ARCHETYPE_CAPS[primary_archetype]
     score_factor = 0.55 + (combined_score / 100) * 0.45
-    suggested_size = round(min(cap, cap * score_factor), 2) if can_enter else 0.0
+    risk_factor = size_risk_factor(snapshot)
+    suggested_size = round(min(cap, cap * score_factor * risk_factor), 2) if can_enter else 0.0
     stop_loss = round(price * 0.92, 2)
 
     rationale = [
