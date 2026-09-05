@@ -2,26 +2,56 @@ from __future__ import annotations
 
 import unittest
 
-from vcb_alt.models import EvaluationResult, StockSnapshot
+from vcb_alt.models import HIGH_VOL_ARCHETYPES, EvaluationResult, StockSnapshot
 from vcb_alt.portfolio import select_portfolio
 from vcb_alt.sample_data import get_snapshot
 from vcb_alt.scoring import ENTRY_SCORE_THRESHOLD, MIN_DATA_COVERAGE_FOR_ENTRY, evaluate_snapshot
 
 
 class PortfolioTests(unittest.TestCase):
-    def test_select_portfolio_applies_position_and_high_vol_limits(self) -> None:
+    def _sample_selection(self, **kwargs: object):
         evaluations = [
             evaluate_snapshot(get_snapshot(ticker))
             for ticker in ["PLTR", "VST", "MSTR", "GME", "RGTI", "SMMT", "AAPL"]
         ]
-        selection = select_portfolio(evaluations, max_positions=3, max_total_size_pct=75, high_vol_max=1)
-        selected = [item.ticker for item in selection.selected]
+        options = {"max_positions": 3, "max_total_size_pct": 75, "high_vol_max": 1}
+        options.update(kwargs)
+        return select_portfolio(evaluations, **options)  # type: ignore[arg-type]
+
+    def test_select_portfolio_applies_position_and_high_vol_limits(self) -> None:
+        """The limits, not which names happen to win them.
+
+        This used to assert that PLTR and VST were selected. That held only because every
+        strong sample name scored exactly 100 and the order came from tie-breaks; once
+        scores were normalised and started separating, the assertion failed without any
+        limit being violated. The limits are what this test is for.
+        """
+        selection = self._sample_selection()
+        selected = selection.selected
         self.assertEqual(len(selected), 3)
-        self.assertIn("PLTR", selected)
-        self.assertIn("VST", selected)
         self.assertLessEqual(selection.total_size_pct, 75)
+
+        archetypes = [item.primary_archetype for item in selected]
+        self.assertEqual(len(archetypes), len(set(archetypes)), "duplicate archetype selected")
+        high_vol = [name for name in archetypes if name in HIGH_VOL_ARCHETYPES]
+        self.assertLessEqual(len(high_vol), 1)
+
+        scores = [item.combined_score for item in selected]
+        self.assertEqual(scores, sorted(scores, reverse=True), "selection is not score-ordered")
+
         rejected_reasons = {item["ticker"]: item["reason"] for item in selection.rejected}
         self.assertEqual(rejected_reasons["AAPL"], "Score below entry threshold.")
+
+    def test_sample_selection_is_recorded(self) -> None:
+        """A deliberate record of what the current engine picks from the sample set.
+
+        Not a claim that this is the right answer - there is no outcome data to judge that
+        yet. It exists so a scoring change shows up here as an explicit decision rather
+        than sliding through unnoticed. Update it together with SCORING_VERSION, and use
+        tools/scoring_diff.py to see what moved.
+        """
+        selected = [item.ticker for item in self._sample_selection().selected]
+        self.assertEqual(selected, ["RGTI", "MSTR", "VST"])
 
     def test_technical_momentum_can_fill_multiple_slots(self) -> None:
         evaluations = [

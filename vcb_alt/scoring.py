@@ -28,6 +28,30 @@ def _clamp_score(value: int) -> int:
     return max(0, min(100, int(value)))
 
 
+# The most points each archetype's formula can award, which is not 100 and is not the
+# same across archetypes. Raw sums were simply clipped at 100, with two consequences:
+# strong names piled up on the ceiling and stopped being distinguishable, and max() -
+# which picks the primary archetype - compared scores drawn from different denominators,
+# so C_QUANTUM's 130 available points beat B/D/E's 110 for equivalent evidence.
+#
+# Scores are now a percentage of what the archetype can award, so a score means "how much
+# of this archetype's available evidence this name has" and the archetypes are comparable.
+# test_archetype_maxima_are_current pins these against the formulas.
+ARCHETYPE_MAX_POINTS = {
+    "A_AI_TECH": 123,
+    "B_CRYPTO_PIVOT": 110,
+    "C_QUANTUM": 130,
+    "D_BIOTECH": 110,
+    "E_SHORT_SQUEEZE": 110,
+    "F_PICK_SHOVEL": 115,
+    "G_TECHNICAL_MOMENTUM": 100,
+}
+
+
+def _normalise(raw: int, archetype: str) -> int:
+    return max(0, min(100, round(raw * 100 / ARCHETYPE_MAX_POINTS[archetype])))
+
+
 def _setup_strength(score: int) -> str:
     if score >= 70:
         return "STRONG_SETUP"
@@ -37,12 +61,22 @@ def _setup_strength(score: int) -> str:
 
 
 def score_archetypes(snapshot: StockSnapshot) -> dict[str, int]:
+    """Each archetype's evidence as a percentage of what that archetype can award."""
+    raw = _raw_archetype_points(snapshot)
+    return {
+        name: value if name == "G_TECHNICAL_MOMENTUM" else _normalise(value, name)
+        for name, value in raw.items()
+    }
+
+
+def _raw_archetype_points(snapshot: StockSnapshot) -> dict[str, int]:
+    """Unnormalised sums. The maxima in ARCHETYPE_MAX_POINTS are the ceilings of these."""
     price = validate_positive_number(snapshot.price, "price")
     trend_bonus = min(15, max(0, snapshot.trend_template_score // 6))
     surge_bonus = min(10, max(0, snapshot.surge_score // 10))
     market_momentum_score = _market_momentum_score(snapshot)
     scores = {
-        "A_AI_TECH": _clamp_score(
+        "A_AI_TECH": (
             _points(max(snapshot.revenue_surprise_pct, snapshot.earnings_surprise_pct) >= 20, 25)
             + _points(snapshot.revenue_acceleration_pp >= 5, 20)
             + _points(snapshot.sector_rs_12w_pp >= 10, 20)
@@ -52,7 +86,7 @@ def score_archetypes(snapshot: StockSnapshot) -> dict[str, int]:
             + _points(snapshot.analyst_revision_score >= 35, 8)
             + trend_bonus
         ),
-        "B_CRYPTO_PIVOT": _clamp_score(
+        "B_CRYPTO_PIVOT": (
             _points(snapshot.btc_6m_return_pct >= 30, 25)
             + _points(snapshot.news_catalyst_30d, 25)
             + _points(snapshot.mining_capacity_increase_pct >= 30, 15)
@@ -61,7 +95,7 @@ def score_archetypes(snapshot: StockSnapshot) -> dict[str, int]:
             + _points(snapshot.drawdown_recovery_pct >= 20, 10)
             + surge_bonus
         ),
-        "C_QUANTUM": _clamp_score(
+        "C_QUANTUM": (
             _points(snapshot.float_shares_m > 0 and snapshot.float_shares_m < 50, 20)
             + _points(0 < snapshot.market_cap_m < 500, 20)
             + _points(snapshot.news_catalyst_30d, 25)
@@ -70,7 +104,7 @@ def score_archetypes(snapshot: StockSnapshot) -> dict[str, int]:
             + _points(1 <= price <= 10, 20)
             + surge_bonus
         ),
-        "D_BIOTECH": _clamp_score(
+        "D_BIOTECH": (
             _points(snapshot.fda_milestone_90d, 30)
             + _points(snapshot.insider_buy_count_90d >= 2, 15)
             + _points(0 < snapshot.short_interest_pct < 10, 15)
@@ -78,7 +112,7 @@ def score_archetypes(snapshot: StockSnapshot) -> dict[str, int]:
             + _points(snapshot.news_catalyst_30d, 20)
             + _points(snapshot.trend_template_score >= 50, 10)
         ),
-        "E_SHORT_SQUEEZE": _clamp_score(
+        "E_SHORT_SQUEEZE": (
             _points(snapshot.short_interest_pct >= 25, 30)
             + _points(snapshot.days_to_cover >= 5, 15)
             + _points(snapshot.borrow_rate_pct >= 50, 15)
@@ -87,7 +121,7 @@ def score_archetypes(snapshot: StockSnapshot) -> dict[str, int]:
             + _points(snapshot.news_catalyst_30d, 15)
             + surge_bonus
         ),
-        "F_PICK_SHOVEL": _clamp_score(
+        "F_PICK_SHOVEL": (
             _points(snapshot.data_center_narrative, 25)
             + _points(snapshot.sector_rs_12w_pp >= 20, 20)
             + _points(snapshot.above_200dma, 15)

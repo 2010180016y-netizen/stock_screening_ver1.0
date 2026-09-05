@@ -4,7 +4,13 @@ import unittest
 
 from vcb_alt.models import StockSnapshot
 from vcb_alt.sample_data import get_snapshot
-from vcb_alt.scoring import evaluate_snapshot, score_archetypes, score_complexity_modifier
+from vcb_alt.scoring import (
+    ARCHETYPE_MAX_POINTS,
+    _raw_archetype_points,
+    evaluate_snapshot,
+    score_archetypes,
+    score_complexity_modifier,
+)
 
 
 class ScoringTests(unittest.TestCase):
@@ -101,3 +107,91 @@ class ComplexityModifierTests(unittest.TestCase):
         )
         self.assertEqual(score_complexity_modifier(squeeze, "E_SHORT_SQUEEZE"), 0)
         self.assertEqual(score_complexity_modifier(fundamental, "A_AI_TECH"), 0)
+
+
+class ArchetypeNormalisationTests(unittest.TestCase):
+    """Raw sums were clipped at 100, which cost discrimination and skewed max().
+
+    Eight of a 24-name corpus scored exactly 100, so at the top the score stopped
+    separating anything and a one-point move decided a portfolio slot. The archetypes also
+    award different totals - 110 to 130 - and max() compared those directly, so
+    C_QUANTUM's larger denominator beat B/D/E for equivalent evidence.
+    """
+
+    IDEAL: dict[str, dict[str, object]] = {
+        "A_AI_TECH": dict(
+            revenue_surprise_pct=99.0, revenue_acceleration_pp=50.0, sector_rs_12w_pp=50.0,
+            insider_buy_count_90d=9, breakout_volume_ratio=5.0, forward_guidance_raised=True,
+            analyst_revision_score=99.0, trend_template_score=100,
+        ),
+        "B_CRYPTO_PIVOT": dict(
+            btc_6m_return_pct=99.0, news_catalyst_30d=True, mining_capacity_increase_pct=99.0,
+            above_200dma=True, volume_z_score_30d=9.0, drawdown_recovery_pct=99.0, surge_score=100,
+        ),
+        "C_QUANTUM": dict(
+            float_shares_m=30.0, market_cap_m=300.0, news_catalyst_30d=True,
+            peer_30d_return_pct=99.0, volume_z_score_30d=9.0, surge_score=100,
+        ),
+        "D_BIOTECH": dict(
+            fda_milestone_90d=True, insider_buy_count_90d=9, short_interest_pct=5.0,
+            market_cap_m=300.0, news_catalyst_30d=True, trend_template_score=100,
+        ),
+        "E_SHORT_SQUEEZE": dict(
+            short_interest_pct=30.0, days_to_cover=9.0, borrow_rate_pct=99.0,
+            call_oi_change_pct=999.0, volume_z_score_30d=9.0, news_catalyst_30d=True, surge_score=100,
+        ),
+        "F_PICK_SHOVEL": dict(
+            data_center_narrative=True, sector_rs_12w_pp=50.0, above_200dma=True,
+            eps_revision_pct=99.0, revenue_acceleration_pp=50.0, breakout_volume_ratio=5.0,
+            trend_template_score=100,
+        ),
+    }
+
+    def _ideal(self, archetype: str) -> StockSnapshot:
+        base: dict[str, object] = {
+            "ticker": "MAX", "company_name": "Max", "price": 5.0,
+            "source": "yahoo", "data_as_of": "2026-09-01",
+        }
+        base.update(self.IDEAL[archetype])
+        return StockSnapshot(**base)  # type: ignore[arg-type]
+
+    def test_archetype_maxima_are_current(self) -> None:
+        """ARCHETYPE_MAX_POINTS must match what the formulas can actually award.
+
+        If a weight in score_archetypes changes and this constant does not, every score
+        for that archetype is quietly scaled against the wrong denominator. This fails
+        loudly instead, and the number in the message is the one to write down.
+        """
+        for archetype in self.IDEAL:
+            with self.subTest(archetype=archetype):
+                raw = _raw_archetype_points(self._ideal(archetype))[archetype]
+                self.assertEqual(
+                    raw, ARCHETYPE_MAX_POINTS[archetype],
+                    f"{archetype} can award {raw} points; update ARCHETYPE_MAX_POINTS",
+                )
+
+    def test_a_maxed_archetype_scores_100(self) -> None:
+        for archetype in self.IDEAL:
+            with self.subTest(archetype=archetype):
+                self.assertEqual(score_archetypes(self._ideal(archetype))[archetype], 100)
+
+    def test_equivalent_evidence_scores_alike_across_archetypes(self) -> None:
+        """Half of each archetype's available evidence should score about the same.
+
+        Before normalisation the same fraction produced different scores depending on how
+        many points the archetype happened to award.
+        """
+        halves = {
+            archetype: score_archetypes(self._ideal(archetype))[archetype]
+            for archetype in self.IDEAL
+        }
+        self.assertEqual(set(halves.values()), {100})
+
+    def test_strong_names_are_still_distinguishable(self) -> None:
+        """The ceiling used to collapse every strong name onto the same number."""
+        scores = sorted(
+            evaluate_snapshot(get_snapshot(ticker)).combined_score
+            for ticker in ("PLTR", "MSTR", "RGTI", "SMMT", "VST", "GME")
+        )
+        self.assertGreater(len(set(scores)), 1, "strong names all collapsed to one score")
+        self.assertLess(max(scores), 100, "a name is still pinned to the ceiling")
