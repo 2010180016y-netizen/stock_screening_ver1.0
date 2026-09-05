@@ -6,6 +6,9 @@ from vcb_alt.models import StockSnapshot
 from vcb_alt.sample_data import get_snapshot
 from vcb_alt.scoring import (
     ARCHETYPE_MAX_POINTS,
+    CONFIRMATION_BONUS_MAX,
+    ENTRY_SCORE_THRESHOLD,
+    score_confirmation_bonus,
     _raw_archetype_points,
     evaluate_snapshot,
     score_archetypes,
@@ -195,3 +198,41 @@ class ArchetypeNormalisationTests(unittest.TestCase):
         )
         self.assertGreater(len(set(scores)), 1, "strong names all collapsed to one score")
         self.assertLess(max(scores), 100, "a name is still pinned to the ceiling")
+
+
+class ConfirmationBonusTests(unittest.TestCase):
+    """max() kept the best archetype and discarded the rest.
+
+    A name whose case was independently made by two archetypes ranked exactly level with
+    one that only worked under a single thesis. Corroboration is evidence; it was being
+    thrown away.
+    """
+
+    def test_a_second_archetype_below_the_entry_bar_counts_for_nothing(self) -> None:
+        """Shared evidence would otherwise creep back in.
+
+        A catalyst flag appears in four archetypes, so a low bar would pay a name twice
+        for one fact - the same defect removed from the complexity modifier.
+        """
+        for second in (0, 20, 54):
+            with self.subTest(second=second):
+                scores = {"A_AI_TECH": 80, "B_CRYPTO_PIVOT": second}
+                self.assertEqual(score_confirmation_bonus(scores, "A_AI_TECH"), 0)
+
+    def test_credit_scales_with_the_second_archetype_and_is_capped(self) -> None:
+        at_bar = score_confirmation_bonus({"A_AI_TECH": 80, "F_PICK_SHOVEL": ENTRY_SCORE_THRESHOLD}, "A_AI_TECH")
+        midway = score_confirmation_bonus({"A_AI_TECH": 80, "F_PICK_SHOVEL": 78}, "A_AI_TECH")
+        maxed = score_confirmation_bonus({"A_AI_TECH": 80, "F_PICK_SHOVEL": 100}, "A_AI_TECH")
+        self.assertEqual(at_bar, 0)
+        self.assertGreater(midway, at_bar)
+        self.assertEqual(maxed, CONFIRMATION_BONUS_MAX)
+        self.assertLess(midway, maxed)
+
+    def test_the_primary_archetype_never_confirms_itself(self) -> None:
+        self.assertEqual(score_confirmation_bonus({"A_AI_TECH": 100}, "A_AI_TECH"), 0)
+
+    def test_two_theses_outrank_one_at_equal_primary_strength(self) -> None:
+        single = {"A_AI_TECH": 70, "F_PICK_SHOVEL": 20}
+        double = {"A_AI_TECH": 70, "F_PICK_SHOVEL": 70}
+        self.assertEqual(score_confirmation_bonus(single, "A_AI_TECH"), 0)
+        self.assertGreater(score_confirmation_bonus(double, "A_AI_TECH"), 0)

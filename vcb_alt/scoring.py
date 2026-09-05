@@ -19,6 +19,10 @@ OPTION_INTEREST_ARCHETYPES = frozenset({"E_SHORT_SQUEEZE"})
 SHORT_INTEREST_ARCHETYPES = frozenset({"D_BIOTECH", "E_SHORT_SQUEEZE"})
 VOLUME_SPIKE_ARCHETYPES = frozenset({"B_CRYPTO_PIVOT", "C_QUANTUM", "E_SHORT_SQUEEZE"})
 
+# Most a second archetype can add. Small on purpose: corroboration is evidence, but the
+# primary thesis is what the candidate is being put forward on.
+CONFIRMATION_BONUS_MAX = 10
+
 
 def _points(condition: bool, value: int) -> int:
     return value if condition else 0
@@ -198,6 +202,28 @@ def score_complexity_modifier(snapshot: StockSnapshot, primary_archetype: str) -
     return max(-25, min(25, modifier))
 
 
+def score_confirmation_bonus(archetype_scores: dict[str, int], primary_archetype: str) -> int:
+    """Credit a name whose case is made by more than one archetype.
+
+    max() keeps the best archetype and discards the rest, so a name that independently
+    reaches a strong score under two different theses ranked exactly level with one that
+    only worked under a single thesis. Corroboration from a second angle is evidence, and
+    it was being thrown away.
+
+    The bar is deliberately high: the second archetype must clear the entry threshold on
+    its own before it counts for anything, and the credit is capped at
+    CONFIRMATION_BONUS_MAX so the primary thesis still decides the score. Some evidence is
+    shared between archetypes - a catalyst flag appears in four of them - so a lower bar
+    would quietly re-introduce the double counting removed from the modifier.
+    """
+    others = [score for name, score in archetype_scores.items() if name != primary_archetype]
+    second = max(others, default=0)
+    if second < ENTRY_SCORE_THRESHOLD:
+        return 0
+    span = 100 - ENTRY_SCORE_THRESHOLD
+    return min(CONFIRMATION_BONUS_MAX, round((second - ENTRY_SCORE_THRESHOLD) / span * CONFIRMATION_BONUS_MAX))
+
+
 def evaluate_snapshot(snapshot: StockSnapshot) -> EvaluationResult:
     ticker = validate_ticker(snapshot.ticker)
     price = validate_positive_number(snapshot.price, "price")
@@ -205,7 +231,8 @@ def evaluate_snapshot(snapshot: StockSnapshot) -> EvaluationResult:
     primary_archetype = max(archetype_scores, key=archetype_scores.get)
     primary_score = archetype_scores[primary_archetype]
     modifier = score_complexity_modifier(snapshot, primary_archetype)
-    combined_score = _clamp_score(primary_score + modifier)
+    confirmation = score_confirmation_bonus(archetype_scores, primary_archetype)
+    combined_score = _clamp_score(primary_score + modifier + confirmation)
     setup = _setup_strength(combined_score)
     coverage = assess_data_coverage(snapshot)
     can_enter = combined_score >= ENTRY_SCORE_THRESHOLD and bool(coverage["allows_entry"])
