@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from vcb_alt.models import HIGH_VOL_ARCHETYPES, EvaluationResult, StockSnapshot
-from vcb_alt.portfolio import select_portfolio
+from vcb_alt.models import ARCHETYPE_CAPS, HIGH_VOL_ARCHETYPES, EvaluationResult, StockSnapshot
+from vcb_alt.portfolio import ARCHETYPE_RISK_FACTORS, select_portfolio
 from vcb_alt.sample_data import get_snapshot
 from vcb_alt.scoring import ENTRY_SCORE_THRESHOLD, MIN_DATA_COVERAGE_FOR_ENTRY, evaluate_snapshot
 
@@ -72,19 +72,26 @@ class PortfolioTests(unittest.TestCase):
         self.assertEqual([item.ticker for item in selection.selected], ["HIGH", "MID", "LOW"])
 
 
-def make_result(ticker: str, score: int, *, coverage: int = 0) -> EvaluationResult:
+def make_result(
+    ticker: str,
+    score: int,
+    *,
+    coverage: int = 0,
+    archetype: str = "G_TECHNICAL_MOMENTUM",
+    size: float | None = None,
+) -> EvaluationResult:
     return EvaluationResult(
         ticker=ticker,
         company_name=ticker,
         scoring_version="test",
-        primary_archetype="G_TECHNICAL_MOMENTUM",
-        primary_archetype_label="Technical Momentum",
-        archetype_scores={"G_TECHNICAL_MOMENTUM": score},
+        primary_archetype=archetype,
+        primary_archetype_label=archetype,
+        archetype_scores={archetype: score},
         complexity_modifier=0,
         combined_score=score,
         setup_strength="SETUP",
         can_enter=True,
-        suggested_size_pct=10.0,
+        suggested_size_pct=10.0 if size is None else size,
         stop_loss=90.0,
         status="MONITOR",
         decision_label="Monitoring candidate",
@@ -139,3 +146,48 @@ class BlockedReasonTests(unittest.TestCase):
         selection = select_portfolio([strong, weak])
         self.assertEqual(selection.selected, [])
         self.assertEqual(len(selection.rejected), 2)
+
+
+class RiskFactorTests(unittest.TestCase):
+    """A different archetype is not always a different bet.
+
+    A_AI_TECH and F_PICK_SHOVEL are both funded by the AI build-out - one buys the story,
+    the other the infrastructure - and both are capped at 25%. The archetype rule saw two
+    different archetypes and allowed a book that was roughly half one trade.
+    """
+
+    def test_two_expressions_of_one_bet_are_capped_together(self) -> None:
+        evaluations = [
+            make_result("PLTR", 90, archetype="A_AI_TECH", size=25.0),
+            make_result("VST", 88, archetype="F_PICK_SHOVEL", size=25.0),
+            make_result("MSTR", 80, archetype="B_CRYPTO_PIVOT", size=20.0),
+        ]
+        selection = select_portfolio(evaluations, max_positions=3)
+        selected = [item.ticker for item in selection.selected]
+        self.assertEqual(selected, ["PLTR", "MSTR"])
+
+        reason = next(item["reason"] for item in selection.rejected if item["ticker"] == "VST")
+        self.assertIn("ai_buildout", reason)
+
+    def test_unrelated_archetypes_still_fill_the_book(self) -> None:
+        evaluations = [
+            make_result("AAA", 90, archetype="A_AI_TECH", size=25.0),
+            make_result("BBB", 88, archetype="B_CRYPTO_PIVOT", size=22.0),
+            make_result("CCC", 80, archetype="D_BIOTECH", size=18.0),
+        ]
+        selection = select_portfolio(evaluations, max_positions=3)
+        self.assertEqual([item.ticker for item in selection.selected], ["AAA", "BBB", "CCC"])
+
+    def test_the_cap_is_adjustable(self) -> None:
+        evaluations = [
+            make_result("PLTR", 90, archetype="A_AI_TECH", size=25.0),
+            make_result("VST", 88, archetype="F_PICK_SHOVEL", size=25.0),
+        ]
+        loosened = select_portfolio(evaluations, max_positions=3, max_factor_exposure_pct=60.0)
+        self.assertEqual(len(loosened.selected), 2)
+        tightened = select_portfolio(evaluations, max_positions=3, max_factor_exposure_pct=20.0)
+        self.assertEqual(len(tightened.selected), 0)
+
+    def test_every_archetype_has_a_factor(self) -> None:
+        """A missing entry would silently fall back to per-archetype behaviour."""
+        self.assertEqual(set(ARCHETYPE_RISK_FACTORS), set(ARCHETYPE_CAPS))

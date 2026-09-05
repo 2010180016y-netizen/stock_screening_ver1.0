@@ -71,8 +71,15 @@ class WebTests(unittest.TestCase):
 
             selection = handle_api(config, "GET", "/api/select", "", None)
             self.assertTrue(selection.ok)
-            self.assertEqual(len(selection.data["selection"]["selected"]), 3)
-            self.assertIn("public_label", selection.data["selection"]["selected"][0])
+            # PLTR and VST are different archetypes but the same bet - the AI build-out,
+            # one buying the story and one the infrastructure - and together they were
+            # about 45% of the book. The shared-risk-factor cap now takes the second one,
+            # so this watchlist yields two positions rather than three.
+            selected = selection.data["selection"]["selected"]
+            self.assertEqual(len(selected), 2)
+            self.assertIn("public_label", selected[0])
+            reasons = {item["ticker"]: item["reason"] for item in selection.data["selection"]["rejected"]}
+            self.assertIn("ai_buildout", reasons.get("PLTR", "") + reasons.get("VST", ""))
 
             provider = handle_api(config, "GET", "/api/provider-status", "", None)
             self.assertTrue(provider.ok)
