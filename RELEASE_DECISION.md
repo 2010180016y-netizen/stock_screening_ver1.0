@@ -10,6 +10,24 @@ Latest deployment update: 2026-06-04 KST
 
 NOT_READY_FOR_PUBLIC_1000_USER_SAAS.
 
+2026-09-05 scoring change: SCORING_VERSION moved from `mvp-market-v0.6.0` to
+`mvp-market-v0.7.0`. Scores stored under the old version are not comparable with new ones
+and must be read against the version recorded on each evaluation. Six defects were fixed:
+the complexity modifier re-paid evidence the primary archetype already scored; raw
+archetype sums were clipped at 100 so strong names could not be told apart and archetypes
+with larger point totals were favoured; a second archetype making the same case counted
+for nothing; continuous thresholds were cliffs, where a 0.1 difference in an input was
+worth up to 30 points; A_AI_TECH and F_PICK_SHOVEL could put roughly half the book into
+one bet under two archetype labels; and position size ignored everything except
+conviction. `tools/scoring_diff.py` records the engine over a fixed corpus and reports
+what a change moves. Over that corpus every row moved, no candidate crossed the entry
+threshold, and total suggested exposure fell from 72% to 55%.
+
+None of this is evidence that the new scores are better. There is still no measurement of
+what happened to past candidates, so no scoring change here - including this one - can be
+judged against outcomes. That gap is the reason the entry threshold was left at 55 rather
+than retuned.
+
 2026-09-02 correction: earlier entries below treat a working Alpaca credential as a
 precondition for a live market scan. That is no longer true. The prefilter is pluggable
 and the keyless Yahoo path produces real end-of-day market data, so a deployment with a
