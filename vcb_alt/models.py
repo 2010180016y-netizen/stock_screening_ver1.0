@@ -25,7 +25,7 @@ ARCHETYPE_CAPS = {
 }
 
 HIGH_VOL_ARCHETYPES = {"C_QUANTUM", "D_BIOTECH", "E_SHORT_SQUEEZE"}
-SCORING_VERSION = "mvp-market-v0.6.0"
+SCORING_VERSION = "mvp-market-v0.7.0"
 
 
 @dataclass(frozen=True)

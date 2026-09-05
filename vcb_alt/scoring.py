@@ -7,6 +7,18 @@ MIN_DATA_COVERAGE_FOR_ENTRY = 60
 # The score a candidate must reach before the coverage gate is even considered.
 ENTRY_SCORE_THRESHOLD = 55
 
+# Which archetypes already price each cross-cutting factor in their own base score.
+# score_complexity_modifier pays a factor only to archetypes absent from its set, so the
+# same evidence is never counted twice. Read these against score_archetypes: every entry
+# below corresponds to a line there that scores the same fact.
+CATALYST_ARCHETYPES = frozenset({"B_CRYPTO_PIVOT", "C_QUANTUM", "D_BIOTECH", "E_SHORT_SQUEEZE"})
+OPTION_INTEREST_ARCHETYPES = frozenset({"E_SHORT_SQUEEZE"})
+# D_BIOTECH is here without scoring short interest positively: it scores a *low* band
+# (0-10%) and separately penalises >=20%, so paying it a high-short-interest bonus would
+# work against its own formula.
+SHORT_INTEREST_ARCHETYPES = frozenset({"D_BIOTECH", "E_SHORT_SQUEEZE"})
+VOLUME_SPIKE_ARCHETYPES = frozenset({"B_CRYPTO_PIVOT", "C_QUANTUM", "E_SHORT_SQUEEZE"})
+
 
 def _points(condition: bool, value: int) -> int:
     return value if condition else 0
@@ -120,11 +132,27 @@ def _market_momentum_score(snapshot: StockSnapshot) -> int:
 
 
 def score_complexity_modifier(snapshot: StockSnapshot, primary_archetype: str) -> int:
+    """Cross-cutting evidence the primary archetype has not already priced.
+
+    Each generic factor below is paid only when the primary archetype's own formula does
+    not score it. Previously all four were paid unconditionally, so a squeeze-shaped name
+    was paid twice for the same facts: short interest, catalyst, volume and call-option
+    interest are all inside E_SHORT_SQUEEZE's base score, and were then re-paid here.
+
+    Measured at the entry threshold, that was worth +14 to +19 to a squeeze-shaped name
+    and +0 to a fundamentals-shaped one, with zero independent information behind the
+    difference. A single boolean, news_catalyst_30d, was worth 15 base + 8 modifier = 23
+    points to a squeeze name - 42% of the score needed to be selected.
+    """
     modifier = 0
-    modifier += _points(snapshot.news_catalyst_30d, 8)
-    modifier += _points(snapshot.call_oi_change_pct >= 200, 6)
-    modifier += _points(snapshot.short_interest_pct >= 25, 6)
-    modifier += _points(snapshot.volume_z_score_30d >= 2.5, 5)
+    for factor, value, priced_by in (
+        (snapshot.news_catalyst_30d, 8, CATALYST_ARCHETYPES),
+        (snapshot.call_oi_change_pct >= 200, 6, OPTION_INTEREST_ARCHETYPES),
+        (snapshot.short_interest_pct >= 25, 6, SHORT_INTEREST_ARCHETYPES),
+        (snapshot.volume_z_score_30d >= 2.5, 5, VOLUME_SPIKE_ARCHETYPES),
+    ):
+        if primary_archetype not in priced_by:
+            modifier += _points(factor, value)
 
     if primary_archetype == "B_CRYPTO_PIVOT":
         modifier += _points(snapshot.btc_6m_return_pct >= 50, 8)
